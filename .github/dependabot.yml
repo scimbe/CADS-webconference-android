@@ -1,0 +1,19 @@
+version: 2
+updates:
+  # Gradle dependencies (androidx.*, material, junit, robolectric, AGP/Kotlin
+  # plugin versions) -- this project already found and fixed one real security
+  # issue by hand (allowBackup="true"); automated dependency monitoring is the
+  # ongoing version of the same "verify" concern.
+  - package-ecosystem: "gradle"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+
+  # GitHub Actions versions -- android-ci.yml's own run already surfaced a real
+  # signal worth acting on automatically: actions/checkout@v4, setup-java@v4,
+  # and upload-artifact@v4 are pinned to versions GitHub is forcing onto a
+  # deprecated Node.js 20 runtime today (see run 30859108660's annotations).
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
