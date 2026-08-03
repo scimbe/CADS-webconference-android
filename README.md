@@ -13,17 +13,24 @@ for the real, iteration-by-iteration record of what built this and why).
 ## Status
 
 - ✅ Kotlin/Gradle scaffold (`namespace org.bunsenbrenner.webconference`,
-  `minSdk 26` for `RTCPeerConnection`/WebRTC support), Gradle 8.7 wrapper checked in.
+  `minSdk 26` for `RTCPeerConnection`/WebRTC support, `compileSdk`/`targetSdk 35`),
+  Gradle 9.6.1 wrapper checked in, AGP 9.3.1 with built-in Kotlin support (no
+  separate Kotlin Gradle plugin needed as of AGP 9.0).
 - ✅ Builds a real, signed debug APK (`./gradlew assembleDebug`), hermetically
   verified in `mingc/android-build-box`.
 - ✅ A real Robolectric unit test (`./gradlew testDebugUnitTest`) proves
   `MainActivity` actually displays its status string, not just that the project
   compiles.
 - ✅ Continuous verification: [`.github/workflows/android-ci.yml`](.github/workflows/android-ci.yml)
-  runs both on every push/PR against `main`.
+  runs both on every push/PR against `main`; [Dependabot](.github/dependabot.yml)
+  watches Gradle deps and Actions versions weekly, with vulnerability alerts and
+  automated security updates enabled on the repo.
 - ✅ One real review pass found and fixed two genuine issues: `allowBackup="true"`
   (a real, if currently low-stakes, security concern given this project's eventual
   purpose) and non-density-aware raw-pixel padding.
+- ✅ Full toolchain modernization pass (Gradle, Kotlin, AGP, Material, compileSdk,
+  CI Actions versions) driven by real Dependabot PRs, each investigated and
+  verified hermetically rather than blindly merged -- see recent commit history.
 - ⏸ **`MainActivity` is a placeholder `TextView`, not a working client.** The real
   target — an Agent-Fabric channel-join + Noise_IK handshake + WebRTC client,
   matching `ct-agent-wasm`'s browser behavior — needs a Rust→Android bridge, since
@@ -40,6 +47,6 @@ for the real, iteration-by-iteration record of what built this and why).
 ./gradlew testDebugUnitTest    # Robolectric unit tests, no emulator needed
 ```
 
-Requires a full Android SDK/NDK toolchain (JDK 17, `compileSdk 34`). CI uses
+Requires a full Android SDK/NDK toolchain (JDK 17, `compileSdk 35`). CI uses
 GitHub-hosted `ubuntu-latest`, which ships one preinstalled; locally this project
 has been verified inside `mingc/android-build-box` via Docker.
