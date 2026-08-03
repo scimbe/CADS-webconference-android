@@ -1,3 +1,5 @@
+import org.jetbrains.kotlin.gradle.dsl.JvmTarget
+
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
@@ -26,13 +28,22 @@ android {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
     }
-    kotlinOptions {
-        jvmTarget = "17"
-    }
     testOptions {
         unitTests {
             isIncludeAndroidResources = true
         }
+    }
+}
+
+// The bare `kotlinOptions { jvmTarget = "17" }` block used to live inside `android {}`
+// here -- it's a hard compile error under the Kotlin Gradle plugin 2.x line (verified
+// against Dependabot PR #4's failed run: "Using 'jvmTarget: String' is an error.
+// Please migrate to the compilerOptions DSL"). Moved to the modern top-level `kotlin {}`
+// extension now, on the current 1.9.24 toolchain, so the migration is verified
+// independently of that still-open version bump, not bundled with it.
+kotlin {
+    compilerOptions {
+        jvmTarget.set(JvmTarget.JVM_17)
     }
 }
 
