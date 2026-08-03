@@ -1,8 +1,9 @@
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 
+// No `org.jetbrains.kotlin.android` plugin: AGP 9's built-in Kotlin support supplies
+// it automatically (see the root build.gradle.kts comment).
 plugins {
     id("com.android.application")
-    id("org.jetbrains.kotlin.android")
 }
 
 android {
@@ -38,12 +39,9 @@ android {
     }
 }
 
-// The bare `kotlinOptions { jvmTarget = "17" }` block used to live inside `android {}`
-// here -- it's a hard compile error under the Kotlin Gradle plugin 2.x line (verified
-// against Dependabot PR #4's failed run: "Using 'jvmTarget: String' is an error.
-// Please migrate to the compilerOptions DSL"). Moved to the modern top-level `kotlin {}`
-// extension now, on the current 1.9.24 toolchain, so the migration is verified
-// independently of that still-open version bump, not bundled with it.
+// jvmTarget configuration lives in the top-level `kotlin {}` extension (the modern
+// compilerOptions DSL, not the deprecated `kotlinOptions` inside android{}) -- still
+// available and functional under AGP's built-in Kotlin support.
 kotlin {
     compilerOptions {
         jvmTarget.set(JvmTarget.JVM_17)
