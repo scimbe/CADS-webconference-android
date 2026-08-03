@@ -7,14 +7,17 @@ plugins {
 
 android {
     namespace = "org.bunsenbrenner.webconference"
-    compileSdk = 34
+    // 35, not 34: androidx.core 1.16.0 (a transitive dependency of Material 1.14.0)
+    // hard-requires compileSdk >= 35 (AAR metadata check, verified against the real
+    // failure in Dependabot PR #5's run 30861733892).
+    compileSdk = 35
 
     defaultConfig {
         applicationId = "org.bunsenbrenner.webconference"
         // Minimum SDK for a real RTCPeerConnection (WebRTC) client -- matches
         // ct-agent-wasm's browser baseline, not picked arbitrarily.
         minSdk = 26
-        targetSdk = 34
+        targetSdk = 35
         versionCode = 1
         versionName = "0.1.0-scaffold"
     }
@@ -50,7 +53,7 @@ kotlin {
 dependencies {
     implementation("androidx.core:core-ktx:1.13.1")
     implementation("androidx.appcompat:appcompat:1.7.0")
-    implementation("com.google.android.material:material:1.12.0")
+    implementation("com.google.android.material:material:1.14.0")
 
     // JVM unit tests via Robolectric -- makes the pipeline's "test" stage real for
     // this project (assembleDebug only proves the scaffold compiles, not that it
