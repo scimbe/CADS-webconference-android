@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">CADS WebConference</string>
+    <string name="status_scaffold">Scaffold only -- built by The Development System pipeline (CADS-Tunnel#382), not yet a real client.</string>
+</resources>
