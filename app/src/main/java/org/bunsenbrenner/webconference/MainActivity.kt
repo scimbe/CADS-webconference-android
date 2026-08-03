@@ -18,7 +18,10 @@ class MainActivity : AppCompatActivity() {
         view.id = R.id.scaffold_status_text
         view.text = getString(R.string.status_scaffold)
         view.textSize = 18f
-        view.setPadding(48, 96, 48, 48)
+        val horizontal = resources.getDimensionPixelSize(R.dimen.scaffold_padding_horizontal)
+        val top = resources.getDimensionPixelSize(R.dimen.scaffold_padding_top)
+        val bottom = resources.getDimensionPixelSize(R.dimen.scaffold_padding_bottom)
+        view.setPadding(horizontal, top, horizontal, bottom)
         setContentView(view)
     }
 }

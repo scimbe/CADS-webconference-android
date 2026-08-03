@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <dimen name="scaffold_padding_horizontal">16dp</dimen>
+    <dimen name="scaffold_padding_top">32dp</dimen>
+    <dimen name="scaffold_padding_bottom">16dp</dimen>
+</resources>
