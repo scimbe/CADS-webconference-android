@@ -15,6 +15,7 @@ class MainActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         val view = TextView(this)
+        view.id = R.id.scaffold_status_text
         view.text = getString(R.string.status_scaffold)
         view.textSize = 18f
         view.setPadding(48, 96, 48, 48)

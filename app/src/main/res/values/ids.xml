@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Stable id for the scaffold's single TextView: lets a unit test find and
+         assert against it deterministically instead of relying on view tree order. -->
+    <item name="scaffold_status_text" type="id" />
+</resources>
