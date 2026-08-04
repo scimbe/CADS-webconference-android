@@ -4,6 +4,7 @@ import android.os.Bundle
 import android.widget.TextView
 import androidx.appcompat.app.AppCompatActivity
 import uniffi.native_bridge.bridgeVersion
+import uniffi.native_bridge.generateNoisePublicKeyHex
 
 /**
  * Deliberately minimal: this is the pipeline's "basic setup" starting point
@@ -14,15 +15,20 @@ import uniffi.native_bridge.bridgeVersion
  *
  * `bridgeVersion()` below is a real UniFFI/JNA call across the FFI boundary
  * into the native-bridge Rust spike (libnative_bridge.so, bundled per-ABI in
- * jniLibs/) -- not a hardcoded string. It's the toolchain's proof-of-life,
- * not the real Noise_IK/Agent-Fabric client yet.
+ * jniLibs/) -- not a hardcoded string. `generateNoisePublicKeyHex()` is the
+ * first real call into CADS-Tunnel's own crypto: it returns a fresh
+ * `ct_common::noise::generate_static_keypair()` public half (the Origin
+ * Identity a peer would pin), computed in Rust each time this runs. Neither
+ * is the real Noise_IK/Agent-Fabric client yet -- that needs the actual
+ * handshake state machine and channel-join on top of this.
  */
 class MainActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         val view = TextView(this)
         view.id = R.id.scaffold_status_text
-        view.text = getString(R.string.status_scaffold) + "\n\n" + nativeBridgeStatusLine()
+        view.text = getString(R.string.status_scaffold) + "\n\n" + nativeBridgeStatusLine() +
+            "\n\n" + noisePublicKeyStatusLine()
         view.textSize = 18f
         val horizontal = resources.getDimensionPixelSize(R.dimen.scaffold_padding_horizontal)
         val top = resources.getDimensionPixelSize(R.dimen.scaffold_padding_top)
@@ -47,6 +53,20 @@ class MainActivity : AppCompatActivity() {
             getString(R.string.status_native_bridge, bridgeVersion())
         } catch (e: LinkageError) {
             getString(R.string.status_native_bridge_unavailable, e.message)
+        }
+    }
+
+    /**
+     * Same real-call / [LinkageError]-fallback shape as [nativeBridgeStatusLine],
+     * for `generateNoisePublicKeyHex()`. On a real device this is a freshly
+     * generated Noise_IK static keypair's public half, computed in Rust and
+     * marshaled back as hex -- not a placeholder.
+     */
+    private fun noisePublicKeyStatusLine(): String {
+        return try {
+            getString(R.string.status_noise_public_key, generateNoisePublicKeyHex())
+        } catch (e: LinkageError) {
+            getString(R.string.status_noise_public_key_unavailable, e.message)
         }
     }
 }

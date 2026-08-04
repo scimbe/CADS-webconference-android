@@ -674,6 +674,8 @@ internal object IntegrityCheckingUniffiLib {
     }
     external fun uniffi_native_bridge_checksum_func_bridge_version(
     ): Int
+    external fun uniffi_native_bridge_checksum_func_generate_noise_public_key_hex(
+    ): Int
     external fun ffi_native_bridge_uniffi_contract_version(
     ): Int
 
@@ -688,6 +690,8 @@ internal object UniffiLib {
         
     }
     external fun uniffi_native_bridge_fn_func_bridge_version(uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
+    external fun uniffi_native_bridge_fn_func_generate_noise_public_key_hex(uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     external fun ffi_native_bridge_rustbuffer_alloc(`size`: Long,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
@@ -809,6 +813,9 @@ private fun uniffiCheckContractApiVersion(lib: IntegrityCheckingUniffiLib) {
 @Suppress("UNUSED_PARAMETER")
 private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
     if (lib.uniffi_native_bridge_checksum_func_bridge_version() != 21059) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_native_bridge_checksum_func_generate_noise_public_key_hex() != 43185) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
 }
@@ -968,6 +975,30 @@ public object FfiConverterString: FfiConverter<String, RustBuffer.ByValue> {
             return FfiConverterString.lift(
     uniffiRustCall() { _status ->
     UniffiLib.uniffi_native_bridge_fn_func_bridge_version(
+    
+        _status)
+}
+    )
+    }
+    
+
+        /**
+         * Generates a real, fresh Noise_IK static keypair via
+         * `ct_common::noise::generate_static_keypair()` -- the exact code path
+         * every real CADS-Tunnel client/origin uses, not a stub or a
+         * hand-rolled X25519 call. Returns only the public half (the Origin
+         * Identity a peer would pin) as lowercase hex.
+         *
+         * The private half is intentionally NOT returned across the FFI boundary in
+         * this increment: `StaticKeypair` is `ZeroizeOnDrop` (CADS-Tunnel #250) and
+         * is zeroized here, inside this function, the moment it goes out of scope --
+         * this call proves the real crypto is reachable from Kotlin without yet
+         * deciding how a persistent identity would be stored securely on-device
+         * (Android Keystore), which is a separate, later increment.
+         */ fun `generateNoisePublicKeyHex`(): kotlin.String {
+            return FfiConverterString.lift(
+    uniffiRustCall() { _status ->
+    UniffiLib.uniffi_native_bridge_fn_func_generate_noise_public_key_hex(
     
         _status)
 }

@@ -4,4 +4,6 @@
     <string name="status_scaffold">Scaffold only -- built by The Development System pipeline (CADS-Tunnel#382), not yet a real client.</string>
     <string name="status_native_bridge">Native bridge (UniFFI, real FFI call): %1$s</string>
     <string name="status_native_bridge_unavailable">Native bridge unavailable in this environment: %1$s</string>
+    <string name="status_noise_public_key">Noise_IK public key (real ct-common crypto): %1$s</string>
+    <string name="status_noise_public_key_unavailable">Noise_IK keypair generation unavailable in this environment: %1$s</string>
 </resources>

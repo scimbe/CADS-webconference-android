@@ -2,7 +2,7 @@
 name = "native-bridge"
 version = "0.1.0"
 edition = "2021"
-description = "UniFFI spike: prove the Rust -> Android bridge toolchain (UniFFI + cargo-ndk) works end to end before the real Noise_IK/Agent-Fabric bridge is built (#382, devsystem.android_native_bridge)."
+description = "Rust -> Android bridge (UniFFI + cargo-ndk) for the real Noise_IK/Agent-Fabric client (#382, devsystem.android_native_bridge). bridge_version proved the toolchain; generate_noise_public_key_hex is the first real call into CADS-Tunnel's own crypto code, not a stub."
 
 [lib]
 crate-type = ["cdylib", "lib"]
@@ -13,3 +13,7 @@ path = "uniffi-bindgen.rs"
 
 [dependencies]
 uniffi = { version = "0.32", features = ["cli"] }
+# Pinned to the exact same tag CADS-devsystem's own Cargo.toml uses, so every
+# consumer of ct-common in this ecosystem agrees on the same wire/crypto
+# primitives -- not a separately-drifting copy.
+ct-common = { git = "https://github.com/scimbe/CADS-Tunnel", tag = "v0.4.13" }
