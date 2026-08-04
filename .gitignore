@@ -9,3 +9,7 @@
 .externalNativeBuild
 .cxx
 local.properties
+
+# native-bridge/ (Rust)
+/native-bridge/target
+/native-bridge/generated
