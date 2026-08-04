@@ -45,3 +45,68 @@ jobs:
         with:
           name: unit-test-report
           path: app/build/reports/tests/testDebugUnitTest/
+
+  verify-native-bridge:
+    runs-on: ubuntu-latest
+    # Real supply-chain check (#382): native-bridge/'s .so files and generated Kotlin
+    # bindings are committed artifacts, built by hand so far (build-android.sh's own
+    # header calls this out: "the .so/.kt files it produces are committed for now --
+    # this is still the toolchain spike, not yet CI-integrated"). This job closes
+    # that gap: it rebuilds both fresh from source and fails if what's committed
+    # doesn't match, so a stale or tampered commit can never slip past silently.
+    #
+    # Kotlin bindings are compared byte-for-byte (uniffi-bindgen is a deterministic
+    # source-to-text generator, no compiler nondeterminism). The .so is compared by
+    # its exported FFI symbol set, not a raw byte hash -- rustc/NDK point-release
+    # drift can change binary bytes without changing the real, meaningful surface
+    # (the symbols Kotlin actually calls), and a raw hash diff would spuriously fail
+    # on ordinary toolchain drift instead of catching real staleness/tampering.
+    # Verified locally end to end (real cargo-ndk rebuild + uniffi-bindgen regen +
+    # diff, against the exact committed artifacts at HEAD) before this job existed.
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android,x86_64-linux-android
+
+      - uses: nttld/setup-ndk@v1
+        id: setup-ndk
+        with:
+          ndk-version: r27d
+
+      - name: Install cargo-ndk (pinned, matches native-bridge/build-android.sh)
+        run: cargo install cargo-ndk --version 4.1.2 --locked
+
+      - name: Rebuild native-bridge for Android from source
+        working-directory: native-bridge
+        env:
+          ANDROID_NDK_HOME: ${{ steps.setup-ndk.outputs.ndk-path }}
+        run: cargo ndk -t arm64-v8a -t x86_64 -o /tmp/fresh-jniLibs build --release
+
+      - name: Regenerate Kotlin bindings from source
+        working-directory: native-bridge
+        run: |
+          cargo build --lib --release --quiet
+          mkdir -p /tmp/fresh-kotlin
+          cargo run --quiet --features=uniffi/cli --bin uniffi-bindgen -- \
+            generate --library target/release/libnative_bridge.so --language kotlin \
+            --out-dir /tmp/fresh-kotlin --no-format
+
+      - name: Verify committed Kotlin bindings match a fresh build exactly
+        run: diff -u /tmp/fresh-kotlin/uniffi/native_bridge/native_bridge.kt app/src/main/java/uniffi/native_bridge/native_bridge.kt
+
+      - name: Verify committed .so exported symbols match a fresh build (per ABI)
+        run: |
+          set -euo pipefail
+          for abi in arm64-v8a x86_64; do
+            echo "=== $abi ==="
+            fresh_syms="$(nm -D --defined-only "/tmp/fresh-jniLibs/$abi/libnative_bridge.so" | awk '{print $3}' | sort)"
+            committed_syms="$(nm -D --defined-only "app/src/main/jniLibs/$abi/libnative_bridge.so" | awk '{print $3}' | sort)"
+            if [ "$fresh_syms" != "$committed_syms" ]; then
+              echo "MISMATCH for $abi -- committed .so's exported symbols differ from a fresh build"
+              diff <(echo "$fresh_syms") <(echo "$committed_syms") || true
+              exit 1
+            fi
+            echo "OK: $abi exported symbols match ($(echo "$fresh_syms" | wc -l) symbols)"
+          done

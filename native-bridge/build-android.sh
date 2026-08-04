@@ -1,9 +1,11 @@
 #!/usr/bin/env bash
 # Cross-compiles native-bridge for Android (cargo-ndk) and regenerates its UniFFI
 # Kotlin bindings, copying both into the app module. Run this after any change to
-# native-bridge/src/lib.rs; the .so/.kt files it produces are committed for now
-# (this is still the toolchain spike, not yet CI-integrated -- see the #382 run
-# notes for the follow-up to build these from source in CI instead).
+# native-bridge/src/lib.rs; the .so/.kt files it produces are committed. CI
+# (.github/workflows/android-ci.yml, verify-native-bridge job) rebuilds both fresh
+# on every push and fails if what's committed here doesn't match -- run this
+# script and commit the result whenever native-bridge/src/lib.rs changes, or CI
+# will catch the drift.
 #
 # Usage: ./build-android.sh
 # Requires: a container/host with the Android NDK (ANDROID_NDK env var set) and
