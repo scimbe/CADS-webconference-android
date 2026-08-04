@@ -13,3 +13,6 @@ local.properties
 # native-bridge/ (Rust)
 /native-bridge/target
 /native-bridge/generated
+# build-android.sh's own intermediate cargo-ndk output staging dir -- byte-identical
+# copies land in app/src/main/jniLibs/, which is the committed deliverable.
+/native-bridge/jniLibs

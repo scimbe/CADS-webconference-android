@@ -2,4 +2,6 @@
 <resources>
     <string name="app_name">CADS WebConference</string>
     <string name="status_scaffold">Scaffold only -- built by The Development System pipeline (CADS-Tunnel#382), not yet a real client.</string>
+    <string name="status_native_bridge">Native bridge (UniFFI, real FFI call): %1$s</string>
+    <string name="status_native_bridge_unavailable">Native bridge unavailable in this environment: %1$s</string>
 </resources>
