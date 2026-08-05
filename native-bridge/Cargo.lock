@@ -601,7 +601,10 @@ name = "native-bridge"
 version = "0.1.0"
 dependencies = [
  "ct-common",
+ "serde",
+ "serde_json",
  "uniffi",
+ "uuid",
 ]
 
 [[package]]
@@ -1174,6 +1177,17 @@ checksum = "fc1de2c688dc15305988b563c3854064043356019f97a4b46276fe734c4f07ea"
 dependencies = [
  "crypto-common",
  "subtle",
+]
+
+[[package]]
+name = "uuid"
+version = "1.24.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bf3923a6f5c4c6382e0b653c4117f48d631ea17f38ed86e2a828e6f7412f5239"
+dependencies = [
+ "getrandom 0.4.3",
+ "js-sys",
+ "wasm-bindgen",
 ]
 
 [[package]]

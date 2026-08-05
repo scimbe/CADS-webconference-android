@@ -31,14 +31,23 @@ for the real, iteration-by-iteration record of what built this and why).
 - ✅ Full toolchain modernization pass (Gradle, Kotlin, AGP, Material, compileSdk,
   CI Actions versions) driven by real Dependabot PRs, each investigated and
   verified hermetically rather than blindly merged -- see recent commit history.
-- ⏸ **`MainActivity` is a placeholder `TextView`, not a working client.** The real
-  target — an Agent-Fabric channel-join + Noise_IK handshake + WebRTC client,
-  matching `ct-agent-wasm`'s browser behavior — needs a Rust→Android bridge, since
-  CADS-Tunnel's Noise_IK/Agent-Fabric code is pure Rust with no existing
-  Android/JNI path. That's a real architecture decision (`cargo-ndk` vs `UniFFI`)
-  currently **blocking further pipeline iterations on this repo** — see
-  [CADS-Tunnel#382](https://github.com/scimbe/CADS-Tunnel/issues/382) for the open
-  question and full context.
+- ✅ `native-bridge/` (UniFFI + cargo-ndk) is real, not a spike anymore: it
+  exports `bridge_version`, `generate_noise_public_key_hex` (a genuine
+  `ct_common::noise::generate_static_keypair()` call), and the #382 channel
+  wire format for text messages (`TextMessage { msg_id, sender_pubkey,
+  timestamp, body }` + `new_text_message`/`encode_text_message`/
+  `decode_text_message`, JSON via `serde_json`, hermetically tested on both the
+  Rust side (`native-bridge/src/message.rs`) and across the FFI boundary from
+  Kotlin (`TextMessageBridgeTest.kt`)).
+- ⏸ **`MainActivity` is still a placeholder `TextView`, not a working client,
+  and there is no `send_text`/`recv_text` against a live channel yet.** The
+  wire format above is a real prerequisite, not the whole thing: actually
+  sending/receiving needs the Agent-Fabric channel-join and the Noise_IK
+  handshake state machine (`ct_common::noise::client_handshake`/
+  `origin_handshake` are still unused by this crate), matching
+  `ct-agent-wasm`'s browser behavior — see
+  [CADS-Tunnel#382](https://github.com/scimbe/CADS-Tunnel/issues/382) for the
+  full context.
 
 ## Building
 

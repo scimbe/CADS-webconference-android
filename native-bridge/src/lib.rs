@@ -8,6 +8,12 @@
 //! (`ct_common::noise::client_handshake`) and the Agent-Fabric channel-join
 //! itself are later, larger increments on top of this.
 
+mod message;
+
+pub use message::{
+    decode_text_message, encode_text_message, new_text_message, MessageDecodeError, TextMessage,
+};
+
 uniffi::setup_scaffolding!();
 
 /// Real, callable proof the native bridge toolchain works -- not a placeholder

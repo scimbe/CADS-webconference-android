@@ -676,6 +676,12 @@ internal object IntegrityCheckingUniffiLib {
     ): Int
     external fun uniffi_native_bridge_checksum_func_generate_noise_public_key_hex(
     ): Int
+    external fun uniffi_native_bridge_checksum_func_decode_text_message(
+    ): Int
+    external fun uniffi_native_bridge_checksum_func_encode_text_message(
+    ): Int
+    external fun uniffi_native_bridge_checksum_func_new_text_message(
+    ): Int
     external fun ffi_native_bridge_uniffi_contract_version(
     ): Int
 
@@ -692,6 +698,12 @@ internal object UniffiLib {
     external fun uniffi_native_bridge_fn_func_bridge_version(uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     external fun uniffi_native_bridge_fn_func_generate_noise_public_key_hex(uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
+    external fun uniffi_native_bridge_fn_func_decode_text_message(`bytes`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
+    external fun uniffi_native_bridge_fn_func_encode_text_message(`message`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
+    external fun uniffi_native_bridge_fn_func_new_text_message(`senderPubkey`: RustBuffer.ByValue,`body`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     external fun ffi_native_bridge_rustbuffer_alloc(`size`: Long,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
@@ -818,6 +830,15 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
     if (lib.uniffi_native_bridge_checksum_func_generate_noise_public_key_hex() != 43185) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
+    if (lib.uniffi_native_bridge_checksum_func_decode_text_message() != 48306) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_native_bridge_checksum_func_encode_text_message() != 58285) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_native_bridge_checksum_func_new_text_message() != 60414) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
 }
 
 /**
@@ -914,6 +935,29 @@ object NoHandle
 /**
  * @suppress
  */
+public object FfiConverterULong: FfiConverter<ULong, Long> {
+    override fun lift(value: Long): ULong {
+        return value.toULong()
+    }
+
+    override fun read(buf: ByteBuffer): ULong {
+        return lift(buf.getLong())
+    }
+
+    override fun lower(value: ULong): Long {
+        return value.toLong()
+    }
+
+    override fun allocationSize(value: ULong) = 8UL
+
+    override fun write(value: ULong, buf: ByteBuffer) {
+        buf.putLong(value.toLong())
+    }
+}
+
+/**
+ * @suppress
+ */
 public object FfiConverterString: FfiConverter<String, RustBuffer.ByValue> {
     // Note: we don't inherit from FfiConverterRustBuffer, because we use a
     // special encoding when lowering/lifting.  We can use `RustBuffer.len` to
@@ -967,6 +1011,194 @@ public object FfiConverterString: FfiConverter<String, RustBuffer.ByValue> {
         buf.put(byteBuf)
     }
 }
+
+/**
+ * @suppress
+ */
+public object FfiConverterByteArray: FfiConverterRustBuffer<ByteArray> {
+    override fun read(buf: ByteBuffer): ByteArray {
+        val len = buf.getInt()
+        val byteArr = ByteArray(len)
+        buf.get(byteArr)
+        return byteArr
+    }
+    override fun allocationSize(value: ByteArray): ULong {
+        return 4UL + value.size.toULong()
+    }
+    override fun write(value: ByteArray, buf: ByteBuffer) {
+        buf.putInt(value.size)
+        buf.put(value)
+    }
+}
+
+
+
+/**
+ * A single text message on an Agent-Fabric channel (#382 wire format).
+ *
+ * Plain text only for this increment -- media (images, voice notes, files) is
+ * a real, separate wire-format extension for a later backlog item, not
+ * something to half-retrofit into `body: String` now (e.g. by smuggling a
+ * content-type/blob-reference into the same field). When that lands it should
+ * most likely be a new variant/field, not a change to this struct's meaning.
+ */
+data class TextMessage (
+    /**
+     * A fresh UUIDv4 (see module docs), identifying this message so a
+     * duplicate delivery (retried send, at-least-once channel relay) can be
+     * deduplicated by the receiver.
+     */
+    var `msgId`: kotlin.String
+    , 
+    /**
+     * The sender's Noise_IK static public key, lowercase hex -- same format
+     * `generate_noise_public_key_hex()` returns.
+     */
+    var `senderPubkey`: kotlin.String
+    , 
+    /**
+     * Unix time in milliseconds, set by the sender at compose time.
+     */
+    var `timestamp`: kotlin.ULong
+    , 
+    /**
+     * Plain-text message body.
+     */
+    var `body`: kotlin.String
+    
+){
+    
+
+    
+
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeTextMessage: FfiConverterRustBuffer<TextMessage> {
+    override fun read(buf: ByteBuffer): TextMessage {
+        return TextMessage(
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterULong.read(buf),
+            FfiConverterString.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: TextMessage) = (
+            FfiConverterString.allocationSize(value.`msgId`) +
+            FfiConverterString.allocationSize(value.`senderPubkey`) +
+            FfiConverterULong.allocationSize(value.`timestamp`) +
+            FfiConverterString.allocationSize(value.`body`)
+    )
+
+    override fun write(value: TextMessage, buf: ByteBuffer) {
+            FfiConverterString.write(value.`msgId`, buf)
+            FfiConverterString.write(value.`senderPubkey`, buf)
+            FfiConverterULong.write(value.`timestamp`, buf)
+            FfiConverterString.write(value.`body`, buf)
+    }
+}
+
+
+
+
+
+/**
+ * Errors decoding a [`TextMessage`] off the wire. A real, typed error crossing
+ * the UniFFI boundary -- decoding attacker-controlled or truncated bytes must
+ * never panic across FFI (an unwinding panic across an `extern "C"` boundary is
+ * undefined behavior), so every failure path here is a `Result::Err`, not an
+ * `unwrap`/`expect`/indexing panic.
+ */
+sealed class MessageDecodeException: kotlin.Exception() {
+    
+    /**
+     * `bytes` was not valid UTF-8, so it cannot be JSON at all.
+     */
+    class InvalidUtf8(
+        
+        val `reason`: kotlin.String
+        ) : MessageDecodeException() {
+        override val message
+            get() = "reason=${ `reason` }"
+    }
+    
+    /**
+     * `bytes` was valid UTF-8 but not a well-formed `TextMessage` -- truncated,
+     * missing/extra fields, or a wrong JSON type for a field.
+     */
+    class Malformed(
+        
+        val `reason`: kotlin.String
+        ) : MessageDecodeException() {
+        override val message
+            get() = "reason=${ `reason` }"
+    }
+    
+
+    
+
+
+    companion object ErrorHandler : UniffiRustCallStatusErrorHandler<MessageDecodeException> {
+        override fun lift(error_buf: RustBuffer.ByValue): MessageDecodeException = FfiConverterTypeMessageDecodeError.lift(error_buf)
+    }
+
+    
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeMessageDecodeError : FfiConverterRustBuffer<MessageDecodeException> {
+    override fun read(buf: ByteBuffer): MessageDecodeException {
+        
+
+        return when(buf.getInt()) {
+            1 -> MessageDecodeException.InvalidUtf8(
+                FfiConverterString.read(buf),
+                )
+            2 -> MessageDecodeException.Malformed(
+                FfiConverterString.read(buf),
+                )
+            else -> throw RuntimeException("invalid error enum value, something is very wrong!!")
+        }
+    }
+
+    override fun allocationSize(value: MessageDecodeException): ULong {
+        return when(value) {
+            is MessageDecodeException.InvalidUtf8 -> (
+                // Add the size for the Int that specifies the variant plus the size needed for all fields
+                4UL
+                + FfiConverterString.allocationSize(value.`reason`)
+            )
+            is MessageDecodeException.Malformed -> (
+                // Add the size for the Int that specifies the variant plus the size needed for all fields
+                4UL
+                + FfiConverterString.allocationSize(value.`reason`)
+            )
+        }
+    }
+
+    override fun write(value: MessageDecodeException, buf: ByteBuffer) {
+        when(value) {
+            is MessageDecodeException.InvalidUtf8 -> {
+                buf.putInt(1)
+                FfiConverterString.write(value.`reason`, buf)
+                Unit
+            }
+            is MessageDecodeException.Malformed -> {
+                buf.putInt(2)
+                FfiConverterString.write(value.`reason`, buf)
+                Unit
+            }
+        }.let { /* this makes the `when` an expression, which ensures it is exhaustive */ }
+    }
+
+}
         /**
          * Real, callable proof the native bridge toolchain works -- not a placeholder
          * string baked into Kotlin, an actual value computed in Rust and marshaled
@@ -1001,6 +1233,61 @@ public object FfiConverterString: FfiConverter<String, RustBuffer.ByValue> {
     UniffiLib.uniffi_native_bridge_fn_func_generate_noise_public_key_hex(
     
         _status)
+}
+    )
+    }
+    
+
+        /**
+         * Decodes a [`TextMessage`] from its wire form. Never panics: malformed input
+         * (not UTF-8, not valid JSON, wrong shape, truncated) returns a real
+         * [`MessageDecodeError`] instead.
+         */
+    @Throws(MessageDecodeException::class) fun `decodeTextMessage`(`bytes`: kotlin.ByteArray): TextMessage {
+            return FfiConverterTypeTextMessage.lift(
+    uniffiRustCallWithError(MessageDecodeException) { _status ->
+    UniffiLib.uniffi_native_bridge_fn_func_decode_text_message(
+    
+        
+        FfiConverterByteArray.lower(`bytes`),_status)
+}
+    )
+    }
+    
+
+        /**
+         * Encodes a [`TextMessage`] as its wire form (UTF-8 JSON bytes). Pure and
+         * infallible -- every `TextMessage` is representable, so there is no `Result`
+         * on this side, only on [`decode_text_message`].
+         */ fun `encodeTextMessage`(`message`: TextMessage): kotlin.ByteArray {
+            return FfiConverterByteArray.lift(
+    uniffiRustCall() { _status ->
+    UniffiLib.uniffi_native_bridge_fn_func_encode_text_message(
+    
+        
+        FfiConverterTypeTextMessage.lower(`message`),_status)
+}
+    )
+    }
+    
+
+        /**
+         * Builds a fresh, well-formed [`TextMessage`]: generates `msg_id` (UUIDv4) and
+         * stamps `timestamp` as the current Unix time in milliseconds, so Kotlin never
+         * has to construct those two fields by hand (and can't accidentally reuse a
+         * `msg_id` or get the clock source wrong).
+         *
+         * `system_time_millis_since_epoch` panics only if the host clock is set before
+         * the Unix epoch, which would indicate a broken host environment, not a
+         * reachable-from-Kotlin input-validation failure -- this is not a decode path.
+         */ fun `newTextMessage`(`senderPubkey`: kotlin.String, `body`: kotlin.String): TextMessage {
+            return FfiConverterTypeTextMessage.lift(
+    uniffiRustCall() { _status ->
+    UniffiLib.uniffi_native_bridge_fn_func_new_text_message(
+    
+        
+        FfiConverterString.lower(`senderPubkey`),
+        FfiConverterString.lower(`body`),_status)
 }
     )
     }
