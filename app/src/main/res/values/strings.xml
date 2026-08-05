@@ -20,6 +20,7 @@
     <string name="connection_failed">Connection failed: %1$s</string>
     <string name="disconnected">Disconnected: %1$s</string>
     <string name="message_hint">Message</string>
+    <string name="empty_message_not_sent">Type a message before tapping Send.</string>
     <string name="send">Send</string>
     <string name="message_line_sent">me: %1$s</string>
     <string name="message_line_received">peer: %1$s</string>

@@ -143,4 +143,40 @@ class MainActivityTest {
             }
         }
     }
+
+    /**
+     * Real gap found and fixed (#382, DAU lens): tapping Send with an empty or
+     * whitespace-only message used to silently do nothing -- no feedback at all, and
+     * a whitespace-only message wasn't even caught (would have actually been sent as
+     * real content). Checked before the session-readiness guard, the same real
+     * production ordering that also makes this path reachable here (`session` is
+     * always null under Robolectric -- a `session ?: return` first would make this
+     * whole test a no-op against real production code, same lesson as the connect
+     * fields test above).
+     */
+    @Test
+    fun sendingABlankMessageIsCaughtWithRealFeedbackAndKeepsFocusForRetry() {
+        ActivityScenario.launch(MainActivity::class.java).use { scenario ->
+            scenario.onActivity { activity ->
+                val messageInput = activity.findViewById<EditText>(R.id.message_input)
+                val send = activity.findViewById<Button>(R.id.send_button)
+                val status = activity.findViewById<TextView>(R.id.connection_status_text)
+                val messages = activity.findViewById<TextView>(R.id.messages_text)
+                val required = activity.getString(R.string.empty_message_not_sent)
+
+                messageInput.setText("")
+                send.performClick()
+                assertTrue(status.text.toString() == required)
+                assertTrue("a no-op tap must never render a message", messages.text.toString().isEmpty())
+                assertTrue("focus must stay on the input for retry", messageInput.isFocused)
+
+                // Whitespace-only -- not merely empty -- must be caught the same way,
+                // not silently sent as real content.
+                messageInput.setText("   ")
+                send.performClick()
+                assertTrue(status.text.toString() == required)
+                assertTrue(messages.text.toString().isEmpty())
+            }
+        }
+    }
 }

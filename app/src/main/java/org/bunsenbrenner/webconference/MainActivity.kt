@@ -249,9 +249,22 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun onSendClicked() {
-        val activeSession = session ?: return
         val body = messageInput.text.toString()
-        if (body.isEmpty()) return
+        // Real gap found and fixed (#382, DAU lens): tapping Send with an empty or
+        // whitespace-only message used to silently do nothing -- no feedback at all,
+        // and `.isEmpty()` alone never caught whitespace-only input (" " is not
+        // empty by length), so a message consisting of just a space would actually
+        // have been sent as real content. Checked before the session-readiness guard
+        // below (same lesson as onConnectClicked's own fix: what the user typed
+        // wrong is the more useful thing to tell them first, and it keeps this path
+        // testable under Robolectric, where `session` is always null) -- a real
+        // status message and focus kept on the input for retry.
+        if (body.isBlank()) {
+            connectionStatusText.text = getString(R.string.empty_message_not_sent)
+            messageInput.requestFocus()
+            return
+        }
+        val activeSession = session ?: return
         lifecycleScope.launch {
             try {
                 val msg = newTextMessage(myPublicKeyHex, body)
