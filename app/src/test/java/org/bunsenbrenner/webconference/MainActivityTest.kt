@@ -108,4 +108,39 @@ class MainActivityTest {
             }
         }
     }
+
+    /**
+     * Real gap found and fixed (#382, DAU lens): tapping Connect with either the peer
+     * public key or address field blank used to go straight to a real native
+     * dialChannelDirect() call. Now caught immediately with a clear message -- proven
+     * here by the connect button staying enabled (it's only ever disabled *after* the
+     * validation check passes, so it staying enabled is real evidence the native call
+     * path was never reached, not just that an error string happens to match).
+     */
+    @Test
+    fun connectingWithEitherFieldBlankIsCaughtBeforeAnyNativeCall() {
+        ActivityScenario.launch(MainActivity::class.java).use { scenario ->
+            scenario.onActivity { activity ->
+                val peerKey = activity.findViewById<EditText>(R.id.peer_public_key_input)
+                val peerAddress = activity.findViewById<EditText>(R.id.peer_address_input)
+                val connect = activity.findViewById<Button>(R.id.connect_button)
+                val status = activity.findViewById<TextView>(R.id.connection_status_text)
+                val required = activity.getString(R.string.connect_fields_required)
+
+                // Both blank.
+                peerKey.setText("")
+                peerAddress.setText("")
+                connect.performClick()
+                assertTrue(status.text.toString() == required)
+                assertTrue("must never have been disabled -- the native call path was never reached", connect.isEnabled)
+
+                // Only the address is blank -- still caught.
+                peerKey.setText("deadbeef")
+                peerAddress.setText("  ")
+                connect.performClick()
+                assertTrue(status.text.toString() == required)
+                assertTrue(connect.isEnabled)
+            }
+        }
+    }
 }

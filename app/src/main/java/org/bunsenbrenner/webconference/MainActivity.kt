@@ -196,9 +196,21 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun onConnectClicked() {
+        val peerKey = peerPublicKeyInput.text.toString().trim()
+        val peerAddr = peerAddressInput.text.toString().trim()
+        // Real gap found and fixed (#382, DAU lens): tapping Connect with either
+        // field blank used to go straight to a real native dialChannelDirect() call
+        // and surface whatever error message the Rust side happened to produce for
+        // malformed input -- confusing for a careless tap, and a real native FFI
+        // round-trip for something checkable locally in a single line. Now caught
+        // immediately, before any native call (and before the identity-readiness
+        // check below), with a clear, actionable message -- what the user actually
+        // typed wrong is the more useful thing to tell them first.
+        if (peerKey.isEmpty() || peerAddr.isEmpty()) {
+            connectionStatusText.text = getString(R.string.connect_fields_required)
+            return
+        }
         val id = identity ?: return
-        val peerKey = peerPublicKeyInput.text.toString()
-        val peerAddr = peerAddressInput.text.toString()
         connectButton.isEnabled = false
         connectionStatusText.text = getString(R.string.connecting)
         lifecycleScope.launch {

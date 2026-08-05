@@ -13,6 +13,7 @@
     <string name="listening_on">Listening on %1$s -- waiting for a peer to connect</string>
     <string name="peer_public_key_hint">Peer public key (hex)</string>
     <string name="peer_address_hint">Peer address (host:port)</string>
+    <string name="connect_fields_required">Enter both the peer\'s public key and address before connecting.</string>
     <string name="connect">Connect</string>
     <string name="connecting">Connecting…</string>
     <string name="connected">Connected -- real Noise_IK session established</string>
