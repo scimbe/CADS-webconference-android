@@ -6,4 +6,20 @@
     <string name="status_native_bridge_unavailable">Native bridge unavailable in this environment: %1$s</string>
     <string name="status_noise_public_key">Noise_IK public key (real ct-common crypto): %1$s</string>
     <string name="status_noise_public_key_unavailable">Noise_IK keypair generation unavailable in this environment: %1$s</string>
+
+    <string name="identity_unavailable">Channel identity unavailable in this environment: %1$s</string>
+    <string name="my_identity_label">My identity (share this with the peer): %1$s</string>
+    <string name="start_listening">Start listening</string>
+    <string name="listening_on">Listening on %1$s -- waiting for a peer to connect</string>
+    <string name="peer_public_key_hint">Peer public key (hex)</string>
+    <string name="peer_address_hint">Peer address (host:port)</string>
+    <string name="connect">Connect</string>
+    <string name="connecting">Connecting…</string>
+    <string name="connected">Connected -- real Noise_IK session established</string>
+    <string name="connection_failed">Connection failed: %1$s</string>
+    <string name="disconnected">Disconnected: %1$s</string>
+    <string name="message_hint">Message</string>
+    <string name="send">Send</string>
+    <string name="message_line_sent">me: %1$s</string>
+    <string name="message_line_received">peer: %1$s</string>
 </resources>

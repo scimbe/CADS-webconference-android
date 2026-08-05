@@ -59,13 +59,19 @@ dependencies {
     // `@aar` classifier is required on Android per UniFFI's own Kotlin Gradle guide
     // (https://mozilla.github.io/uniffi-rs/latest/kotlin/gradle.html, which asks for
     // 5.12.0+); 5.17.0 is the current stable release.
-    //
-    // kotlinx-coroutines-core is deliberately NOT added: verified by reading the
-    // generated bindings that this spike's single function (bridge_version, not
-    // async) produces zero coroutines references -- the file's "// Async support"
-    // section is an empty comment header. Add it if/when a `#[uniffi::export(async)]`
-    // function is introduced.
     implementation("net.java.dev.jna:jna:5.17.0@aar")
+
+    // The `#[uniffi::export(async)]` channel functions (dial_channel_direct,
+    // bind_channel_listener, ChannelSession/ChannelListener's methods) landed since
+    // the note that used to be here ("kotlinx-coroutines-core deliberately NOT
+    // added") was written -- the generated bindings now genuinely import
+    // kotlinx.coroutines.* (suspendCancellableCoroutine, CancellableContinuation).
+    // That already resolves transitively today (verified: testDebugUnitTest/
+    // assembleDebug both pass without this), but MainActivity's own connect/send/
+    // receive UI calls lifecycleScope.launch { ... } directly, which needs
+    // lifecycle-runtime-ktx as a real, direct dependency, not an incidental
+    // transitive one.
+    implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.8.7")
 
     // JVM unit tests via Robolectric -- makes the pipeline's "test" stage real for
     // this project (assembleDebug only proves the scaffold compiles, not that it

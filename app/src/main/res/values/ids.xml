@@ -3,4 +3,17 @@
     <!-- Stable id for the scaffold's single TextView: lets a unit test find and
          assert against it deterministically instead of relying on view tree order. -->
     <item name="scaffold_status_text" type="id" />
+
+    <!-- Minimal connect/send/receive UI (#382): this device's own identity, the
+         listen/connect controls, and the message thread: the actual pieces a
+         real emulator walkthrough (labor-setup.com, issue #13) needs to drive. -->
+    <item name="my_identity_text" type="id" />
+    <item name="start_listening_button" type="id" />
+    <item name="peer_public_key_input" type="id" />
+    <item name="peer_address_input" type="id" />
+    <item name="connect_button" type="id" />
+    <item name="connection_status_text" type="id" />
+    <item name="messages_text" type="id" />
+    <item name="message_input" type="id" />
+    <item name="send_button" type="id" />
 </resources>

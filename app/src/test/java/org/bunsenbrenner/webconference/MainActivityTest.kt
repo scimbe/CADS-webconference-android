@@ -1,5 +1,7 @@
 package org.bunsenbrenner.webconference
 
+import android.widget.Button
+import android.widget.EditText
 import android.widget.TextView
 import androidx.test.core.app.ActivityScenario
 import org.junit.Assert.assertTrue
@@ -8,36 +10,71 @@ import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 
 /**
- * The pipeline's first real "test" stage output for this project: proves the
- * scaffold actually displays its status string, not just that it compiles
- * (assembleDebug's job). Runs on the JVM via Robolectric -- no emulator needed.
+ * Proves the scaffold's status line still renders, and that the real connect/send/
+ * receive UI (#382, minimal chat client) is actually present and wired up -- not just
+ * that MainActivity compiles.
  *
- * The second and third lines come from real calls into
- * `uniffi.native_bridge.bridgeVersion()` and `generateNoisePublicKeyHex()` (see
- * MainActivity.nativeBridgeStatusLine()/noisePublicKeyStatusLine()). Under
- * Robolectric -- a host JVM on desktop glibc Linux -- `libnative_bridge.so`
- * (cross-compiled by cargo-ndk against Android's Bionic libc) cannot load, so
- * this test exercises the real calls' defensive failure paths, not a mocked
- * success. Only an actual Android device/emulator (unavailable on this host,
- * see the #382 run notes) can prove the success paths render the real
- * Rust-computed values.
+ * Runs on the JVM via Robolectric -- no emulator needed. `libnative_bridge.so`
+ * (cross-compiled by cargo-ndk against Android's Bionic libc) cannot load under
+ * Robolectric's host JVM (desktop glibc), so every real FFI call here exercises its
+ * [LinkageError] fallback path, not the success path -- proving the actual
+ * connect/send/receive behavior needs a real device/emulator (issue #13,
+ * labor-setup.com), which these tests deliberately do not attempt to fake.
  */
 @RunWith(RobolectricTestRunner::class)
 class MainActivityTest {
 
     @Test
-    fun displaysTheScaffoldStatusStringFollowedByTheNativeBridgeAndNoiseKeyLines() {
+    fun displaysTheScaffoldStatusStringAndTheNativeBridgeLine() {
         ActivityScenario.launch(MainActivity::class.java).use { scenario ->
             scenario.onActivity { activity ->
                 val view = activity.findViewById<TextView>(R.id.scaffold_status_text)
                 val text = view.text.toString()
                 assertTrue(text.startsWith(activity.getString(R.string.status_scaffold)))
-                // Either the real values came back (only possible on a real
+                // Either the real bridge version came back (only possible on a real
                 // device/emulator ABI-matching jniLibs/), or the LinkageError
                 // fallback fired (expected here, under Robolectric) -- both are
-                // prefixed strings from MainActivity's real call paths.
+                // prefixed strings from MainActivity's own real call path.
                 assertTrue(text.contains("Native bridge"))
-                assertTrue(text.contains("Noise_IK"))
+            }
+        }
+    }
+
+    @Test
+    fun showsAnIdentityStatusEitherRealOrTheHonestUnavailableFallback() {
+        ActivityScenario.launch(MainActivity::class.java).use { scenario ->
+            scenario.onActivity { activity ->
+                val view = activity.findViewById<TextView>(R.id.my_identity_text)
+                val text = view.text.toString()
+                assertTrue(
+                    "expected either the real identity label or the unavailable fallback, got: $text",
+                    text.contains("My identity") || text.contains("unavailable"),
+                )
+            }
+        }
+    }
+
+    @Test
+    fun theRealConnectSendReceiveControlsExistAndAreWiredUp() {
+        ActivityScenario.launch(MainActivity::class.java).use { scenario ->
+            scenario.onActivity { activity ->
+                val startListening = activity.findViewById<Button>(R.id.start_listening_button)
+                val peerKey = activity.findViewById<EditText>(R.id.peer_public_key_input)
+                val peerAddress = activity.findViewById<EditText>(R.id.peer_address_input)
+                val connect = activity.findViewById<Button>(R.id.connect_button)
+                val messages = activity.findViewById<TextView>(R.id.messages_text)
+                val messageInput = activity.findViewById<EditText>(R.id.message_input)
+                val send = activity.findViewById<Button>(R.id.send_button)
+
+                assertTrue(startListening.hasOnClickListeners())
+                assertTrue(connect.hasOnClickListeners())
+                assertTrue(send.hasOnClickListeners())
+                assertTrue(peerKey.hint.toString().contains("public key"))
+                assertTrue(peerAddress.hint.toString().contains("address"))
+                assertTrue(messageInput.hint.toString() == activity.getString(R.string.message_hint))
+                // No message thread yet -- nothing sent or received before any real
+                // channel connects.
+                assertTrue(messages.text.toString().isEmpty())
             }
         }
     }
