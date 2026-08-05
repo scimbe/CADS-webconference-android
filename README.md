@@ -39,13 +39,29 @@ for the real, iteration-by-iteration record of what built this and why).
   `decode_text_message`, JSON via `serde_json`, hermetically tested on both the
   Rust side (`native-bridge/src/message.rs`) and across the FFI boundary from
   Kotlin (`TextMessageBridgeTest.kt`)).
-- ⏸ **`MainActivity` is still a placeholder `TextView`, not a working client,
-  and there is no `send_text`/`recv_text` against a live channel yet.** The
-  wire format above is a real prerequisite, not the whole thing: actually
-  sending/receiving needs the Agent-Fabric channel-join and the Noise_IK
-  handshake state machine (`ct_common::noise::client_handshake`/
-  `origin_handshake` are still unused by this crate), matching
-  `ct-agent-wasm`'s browser behavior — see
+- ✅ `native-bridge/src/channel.rs`: a REAL `send_text`/`recv_text`, backed by
+  a genuine `Noise_IK` handshake (`ct_common::a2a::a2a_initiate`/`a2a_respond`)
+  and real encrypted message framing (`a2a_send`/`a2a_recv`) over a real TCP
+  socket — `generate_channel_identity`, `dial_channel_direct`,
+  `bind_channel_listener`/`ChannelListener::accept`, and
+  `ChannelSession::send_text`/`recv_text`, all real UniFFI async exports
+  (`async_runtime = "tokio"`), hermetically tested including a real two-instance
+  integration test that completes an authenticated handshake and exchanges
+  encrypted `TextMessage`s in both directions.
+  **This is a DIRECT peer-to-peer session, not the full Agent-Fabric
+  channel-join** — no broker/rendezvous, no NAT traversal, no `:443` relay
+  fallback; both sides must already know how to reach each other (out of
+  band). It has only been proven **local-process-to-local-process** (two
+  `cargo test` instances on one machine), NOT real device-to-device messaging
+  over a real network. See
+  [`docs/channel-join-options.md`](docs/channel-join-options.md) for the full
+  survey of what the real broker-mediated channel-join stack (`ct-agent`'s
+  `channel.rs`/`channel_run.rs`) looks like and why this increment doesn't
+  build on it yet.
+- ⏸ **`MainActivity` is still a placeholder `TextView`, not a working
+  client.** It does not yet call any of `channel.rs`'s new exports — wiring a
+  real UI (address/key entry, a message list, Room persistence) is a
+  separate, later backlog item — see
   [CADS-Tunnel#382](https://github.com/scimbe/CADS-Tunnel/issues/382) for the
   full context.
 

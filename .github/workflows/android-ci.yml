@@ -93,6 +93,22 @@ jobs:
             generate --library target/release/libnative_bridge.so --language kotlin \
             --out-dir /tmp/fresh-kotlin --no-format
 
+      # Uploaded unconditionally (`if: always()`), BEFORE the diff steps that can fail this
+      # job: this is what a fresh, from-source, real NDK r27d build actually produced, on a
+      # runner with real resources -- the reference to copy into app/src/main/{jniLibs,java}
+      # and commit whenever native-bridge/src/ changes. Exists because this repo's own
+      # build-android.sh + a real Docker toolchain image aren't always feasible to run locally
+      # (e.g. a memory/disk-constrained dev host) -- CI, not a local machine, is what actually
+      # has to be trusted here, so make its output retrievable instead of only pass/fail.
+      - name: Upload freshly built native-bridge artifacts
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: native-bridge-fresh-build
+          path: |
+            /tmp/fresh-jniLibs/
+            /tmp/fresh-kotlin/
+
       - name: Verify committed Kotlin bindings match a fresh build exactly
         run: diff -u /tmp/fresh-kotlin/uniffi/native_bridge/native_bridge.kt app/src/main/java/uniffi/native_bridge/native_bridge.kt
 

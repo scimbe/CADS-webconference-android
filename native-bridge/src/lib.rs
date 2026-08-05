@@ -4,12 +4,18 @@
 //! the first real call into CADS-Tunnel's own crypto -- the exact
 //! `ct_common::noise::generate_static_keypair()` every real client/origin in
 //! this ecosystem uses (`Noise_IK_25519_ChaChaPoly_BLAKE2s`), not a
-//! reimplementation. The real handshake state machine
-//! (`ct_common::noise::client_handshake`) and the Agent-Fabric channel-join
-//! itself are later, larger increments on top of this.
+//! reimplementation. `channel.rs` is the first real handshake + data path:
+//! a direct peer-to-peer `Noise_IK` session (`ct_common::a2a`) over a real
+//! TCP socket -- see its module docs for exactly what that does and does not
+//! prove yet toward the full broker-mediated Agent-Fabric channel-join.
 
+mod channel;
 mod message;
 
+pub use channel::{
+    bind_channel_listener, dial_channel_direct, generate_channel_identity, ChannelError,
+    ChannelIdentity, ChannelListener, ChannelSession,
+};
 pub use message::{
     decode_text_message, encode_text_message, new_text_message, MessageDecodeError, TextMessage,
 };

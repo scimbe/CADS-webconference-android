@@ -12,7 +12,7 @@ name = "uniffi-bindgen"
 path = "uniffi-bindgen.rs"
 
 [dependencies]
-uniffi = { version = "0.32", features = ["cli"] }
+uniffi = { version = "0.32", features = ["cli", "tokio"] }
 # Pinned to the exact same tag CADS-devsystem's own Cargo.toml uses, so every
 # consumer of ct-common in this ecosystem agrees on the same wire/crypto
 # primitives -- not a separately-drifting copy.
@@ -25,3 +25,17 @@ serde_json = "1"
 # v4 only: this crate needs random UUIDs (see native-bridge/src/message.rs for
 # why UUIDv4 over ULID), not the other uuid variants.
 uuid = { version = "1", features = ["v4"] }
+# native-bridge/src/channel.rs: `ct_common::a2a::{a2a_initiate, a2a_respond, ...}`
+# return/consume `snow::TransportState` directly, so a `ChannelSession` field of
+# that type needs `snow` as a direct (not just transitive) dependency. Pinned to
+# the exact version ct-common's own Cargo.toml (at the v0.4.13 tag above) uses --
+# a mismatched semver-compatible-looking version could still resolve to a
+# DIFFERENT compiled `snow` crate and fail to unify types at the call boundary.
+snow = "0.9"
+# Real async I/O for channel.rs's direct peer-to-peer session (TCP dial/listen,
+# the Noise_IK handshake, send_text/recv_text) -- unlike bridge_version/
+# generate_noise_public_key_hex/the message.rs codec, which are synchronous.
+# `rt-multi-thread` + `macros` back `#[uniffi::export(async_runtime = "tokio")]`
+# (see channel.rs's module docs for why that attribute, not raw foreign-executor
+# polling, is the right call here).
+tokio = { version = "1", features = ["net", "sync", "rt-multi-thread", "macros"] }
