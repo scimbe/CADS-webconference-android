@@ -914,10 +914,10 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
     if (lib.uniffi_native_bridge_checksum_method_channellistener_local_addr() != 19069) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_native_bridge_checksum_method_channelsession_recv_text() != 4715) {
+    if (lib.uniffi_native_bridge_checksum_method_channelsession_recv_text() != 20231) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_native_bridge_checksum_method_channelsession_send_text() != 9136) {
+    if (lib.uniffi_native_bridge_checksum_method_channelsession_send_text() != 39954) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
 }
@@ -1932,6 +1932,19 @@ public interface ChannelSessionInterface {
     /**
      * Receives and decrypts one [`TextMessage`] from the established Noise_IK transport
      * session. Blocks (asynchronously) until a message arrives or the connection is lost.
+     *
+     * Real deadlock, found and fixed (labor-setup.com, issue #13): this used to go through
+     * `ct_common::a2a::a2a_recv`, which holds `transport` for its ENTIRE body, including the
+     * indefinite wait for the next frame to arrive on the wire. `MainActivity`'s real usage
+     * calls `recv_text` in a loop the instant a session connects, so `transport` was
+     * effectively locked forever from that point on -- any concurrent `send_text` could never
+     * acquire it. Fixed by inlining `a2a_recv`'s own two real steps (verified against its
+     * actual body, not guessed) with the lock scoped to only the second one: wait for a raw
+     * frame with ONLY the `read` lock held (`transport` is not needed for that wait at all --
+     * framing and decryption are genuinely separate steps), then take `transport` just long
+     * enough for the synchronous, bounded `read_message` decrypt. A concurrent `send_text` can
+     * now really acquire `transport` while `recv_text` is blocked on the network, which is
+     * where it spends nearly all of its time.
      */
     suspend fun `recvText`(): TextMessage
     
@@ -1940,12 +1953,10 @@ public interface ChannelSessionInterface {
      * over the established Noise_IK transport session.
      *
      * Held locks: this takes the write half's and the transport session's locks for the
-     * duration of one send. A concurrent `recv_text` call only contends on the transport
-     * lock's read-half sibling being free, which it always is (the read half has its own
-     * independent lock) -- so a send in flight never blocks a concurrent receive, or vice
-     * versa, only two concurrent SENDS (or two concurrent RECEIVES) serialize, which is
-     * correct: Noise's transport state advances a nonce per direction and must not be mutated
-     * from two sends racing each other.
+     * duration of one send -- both fast, bounded operations (an in-memory encrypt plus a
+     * `write_all` of a small framed message), never an indefinite wait. See [`Self::recv_text`]'s
+     * own doc comment for why holding `transport` briefly here is safe now, where it wasn't
+     * on the receive side.
      */
     suspend fun `sendText`(`message`: TextMessage)
     
@@ -2063,6 +2074,19 @@ open class ChannelSession: Disposable, AutoCloseable, ChannelSessionInterface
     /**
      * Receives and decrypts one [`TextMessage`] from the established Noise_IK transport
      * session. Blocks (asynchronously) until a message arrives or the connection is lost.
+     *
+     * Real deadlock, found and fixed (labor-setup.com, issue #13): this used to go through
+     * `ct_common::a2a::a2a_recv`, which holds `transport` for its ENTIRE body, including the
+     * indefinite wait for the next frame to arrive on the wire. `MainActivity`'s real usage
+     * calls `recv_text` in a loop the instant a session connects, so `transport` was
+     * effectively locked forever from that point on -- any concurrent `send_text` could never
+     * acquire it. Fixed by inlining `a2a_recv`'s own two real steps (verified against its
+     * actual body, not guessed) with the lock scoped to only the second one: wait for a raw
+     * frame with ONLY the `read` lock held (`transport` is not needed for that wait at all --
+     * framing and decryption are genuinely separate steps), then take `transport` just long
+     * enough for the synchronous, bounded `read_message` decrypt. A concurrent `send_text` can
+     * now really acquire `transport` while `recv_text` is blocked on the network, which is
+     * where it spends nearly all of its time.
      */
     @Throws(ChannelException::class)
     @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
@@ -2090,12 +2114,10 @@ open class ChannelSession: Disposable, AutoCloseable, ChannelSessionInterface
      * over the established Noise_IK transport session.
      *
      * Held locks: this takes the write half's and the transport session's locks for the
-     * duration of one send. A concurrent `recv_text` call only contends on the transport
-     * lock's read-half sibling being free, which it always is (the read half has its own
-     * independent lock) -- so a send in flight never blocks a concurrent receive, or vice
-     * versa, only two concurrent SENDS (or two concurrent RECEIVES) serialize, which is
-     * correct: Noise's transport state advances a nonce per direction and must not be mutated
-     * from two sends racing each other.
+     * duration of one send -- both fast, bounded operations (an in-memory encrypt plus a
+     * `write_all` of a small framed message), never an indefinite wait. See [`Self::recv_text`]'s
+     * own doc comment for why holding `transport` briefly here is safe now, where it wasn't
+     * on the receive side.
      */
     @Throws(ChannelException::class)
     @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")

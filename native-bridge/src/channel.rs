@@ -56,8 +56,8 @@
 use std::net::SocketAddr;
 use std::sync::Arc;
 
-use ct_common::a2a::{a2a_initiate, a2a_recv, a2a_respond, a2a_send};
-use ct_common::noise::{generate_static_keypair, StaticKeypair};
+use ct_common::a2a::{a2a_initiate, a2a_respond, a2a_send};
+use ct_common::noise::{generate_static_keypair, read_frame, StaticKeypair};
 use snow::TransportState;
 use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
 use tokio::net::{TcpListener, TcpStream};
@@ -196,12 +196,10 @@ impl ChannelSession {
     /// over the established Noise_IK transport session.
     ///
     /// Held locks: this takes the write half's and the transport session's locks for the
-    /// duration of one send. A concurrent `recv_text` call only contends on the transport
-    /// lock's read-half sibling being free, which it always is (the read half has its own
-    /// independent lock) -- so a send in flight never blocks a concurrent receive, or vice
-    /// versa, only two concurrent SENDS (or two concurrent RECEIVES) serialize, which is
-    /// correct: Noise's transport state advances a nonce per direction and must not be mutated
-    /// from two sends racing each other.
+    /// duration of one send -- both fast, bounded operations (an in-memory encrypt plus a
+    /// `write_all` of a small framed message), never an indefinite wait. See [`Self::recv_text`]'s
+    /// own doc comment for why holding `transport` briefly here is safe now, where it wasn't
+    /// on the receive side.
     async fn send_text(&self, message: TextMessage) -> Result<(), ChannelError> {
         let bytes = encode_text_message(message);
         let mut write = self.write.lock().await;
@@ -212,10 +210,33 @@ impl ChannelSession {
 
     /// Receives and decrypts one [`TextMessage`] from the established Noise_IK transport
     /// session. Blocks (asynchronously) until a message arrives or the connection is lost.
+    ///
+    /// Real deadlock, found and fixed (labor-setup.com, issue #13): this used to go through
+    /// `ct_common::a2a::a2a_recv`, which holds `transport` for its ENTIRE body, including the
+    /// indefinite wait for the next frame to arrive on the wire. `MainActivity`'s real usage
+    /// calls `recv_text` in a loop the instant a session connects, so `transport` was
+    /// effectively locked forever from that point on -- any concurrent `send_text` could never
+    /// acquire it. Fixed by inlining `a2a_recv`'s own two real steps (verified against its
+    /// actual body, not guessed) with the lock scoped to only the second one: wait for a raw
+    /// frame with ONLY the `read` lock held (`transport` is not needed for that wait at all --
+    /// framing and decryption are genuinely separate steps), then take `transport` just long
+    /// enough for the synchronous, bounded `read_message` decrypt. A concurrent `send_text` can
+    /// now really acquire `transport` while `recv_text` is blocked on the network, which is
+    /// where it spends nearly all of its time.
     async fn recv_text(&self) -> Result<TextMessage, ChannelError> {
-        let mut read = self.read.lock().await;
-        let mut transport = self.transport.lock().await;
-        let bytes = a2a_recv(&mut *read, &mut transport).await?;
+        let ciphertext = {
+            let mut read = self.read.lock().await;
+            read_frame(&mut *read).await?
+        };
+        let bytes = {
+            let mut transport = self.transport.lock().await;
+            let mut plaintext = vec![0u8; ciphertext.len()];
+            let n = transport
+                .read_message(&ciphertext, &mut plaintext)
+                .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, format!("noise: {e}")))?;
+            plaintext.truncate(n);
+            plaintext
+        };
         Ok(decode_text_message(bytes)?)
     }
 }
@@ -336,6 +357,51 @@ mod tests {
         responder_session.send_text(reply.clone()).await.expect("send from responder");
         let received_reply = initiator_session.recv_text().await.expect("recv on initiator");
         assert_eq!(received_reply, reply, "the initiator decrypts exactly what the responder sent");
+    }
+
+    /// The real deadlock (labor-setup.com, issue #13), reproduced and proven fixed: starts
+    /// `recv_text` FIRST, exactly like `MainActivity`'s real `receiveLoop()` does the instant a
+    /// session connects -- it blocks waiting for a message that hasn't been sent yet. While that
+    /// call is genuinely in flight (not raced -- a real `sleep` gives it time to actually reach
+    /// its indefinite wait), a concurrent `send_text` on the OTHER session must still complete.
+    /// On the old code (a single `transport` lock held for `recv_text`'s entire body) this test
+    /// hangs forever; `tokio::time::timeout` turns that into a real, clear test failure instead
+    /// of an actually-frozen CI job.
+    #[tokio::test]
+    async fn a_concurrent_send_does_not_deadlock_behind_an_in_flight_recv() {
+        let responder_identity = generate_channel_identity();
+        let initiator_identity = generate_channel_identity();
+
+        let listener = bind_channel_listener("127.0.0.1:0".to_string()).await.expect("bind");
+        let bound_addr = listener.local_addr().expect("local_addr");
+        let responder_public_hex = responder_identity.public_key_hex();
+        let initiator_public_hex = initiator_identity.public_key_hex();
+
+        let accept_task = tokio::spawn({
+            let responder_identity = responder_identity.clone();
+            async move { listener.accept(responder_identity).await }
+        });
+        let initiator_session = dial_channel_direct(initiator_identity.clone(), responder_public_hex, bound_addr)
+            .await
+            .expect("initiator completes the handshake");
+        let responder_session = accept_task.await.expect("accept task").expect("responder completes the handshake");
+
+        // Start receiving on the responder FIRST -- this is the real ordering that deadlocked:
+        // nothing has been sent yet, so this genuinely blocks on the network wait.
+        let recv_task = tokio::spawn(async move { responder_session.recv_text().await });
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await; // let recv_text actually reach its wait
+
+        let outbound = crate::message::new_text_message(initiator_public_hex, "should not deadlock".to_string());
+        let send_result = tokio::time::timeout(std::time::Duration::from_secs(5), initiator_session.send_text(outbound.clone())).await;
+        assert!(send_result.is_ok(), "send_text must complete within 5s even while a recv_text is genuinely in flight -- it deadlocked instead");
+        send_result.unwrap().expect("the send itself must succeed");
+
+        let received = tokio::time::timeout(std::time::Duration::from_secs(5), recv_task)
+            .await
+            .expect("recv_task must finish within 5s")
+            .expect("recv task")
+            .expect("recv_text must succeed");
+        assert_eq!(received, outbound, "the responder must decrypt exactly what was sent while it was waiting");
     }
 
     /// Authentication property, not an edge case: dialing with a WRONG `peer_public_key_hex`
