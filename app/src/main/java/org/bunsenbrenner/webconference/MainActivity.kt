@@ -8,6 +8,7 @@ import android.widget.EditText
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
+import androidx.annotation.VisibleForTesting
 import androidx.appcompat.app.AppCompatActivity
 import androidx.lifecycle.lifecycleScope
 import kotlinx.coroutines.Dispatchers
@@ -231,7 +232,7 @@ class MainActivity : AppCompatActivity() {
                 renderMessage(msg.body, MessageDirection.RECEIVED)
             }
         } catch (e: ChannelException) {
-            connectionStatusText.text = getString(R.string.disconnected, e.message)
+            resetForNewConnection(getString(R.string.disconnected, e.message))
         }
     }
 
@@ -247,9 +248,25 @@ class MainActivity : AppCompatActivity() {
                 renderMessage(msg.body, MessageDirection.SENT)
                 messageInput.text.clear()
             } catch (e: ChannelException) {
-                connectionStatusText.text = getString(R.string.disconnected, e.message)
+                resetForNewConnection(getString(R.string.disconnected, e.message))
             }
         }
+    }
+
+    /**
+     * Real gap found and closed (#382): [receiveLoop] and [onSendClicked]'s
+     * `ChannelException` catch blocks used to only update the status text, leaving
+     * `session` set and both connect controls disabled forever after -- so a peer
+     * disconnecting (or a send failing after the fact) made the app permanently
+     * unusable until force-restarted. This is the one real recovery path for both:
+     * drop the dead session and let the user actually start listening or dial again.
+     */
+    @VisibleForTesting
+    internal fun resetForNewConnection(statusMessage: String) {
+        connectionStatusText.text = statusMessage
+        session = null
+        startListeningButton.isEnabled = true
+        connectButton.isEnabled = true
     }
 
     /** Pure UI append -- persistence is a separate, explicit call at each real call site

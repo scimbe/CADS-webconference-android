@@ -78,4 +78,34 @@ class MainActivityTest {
             }
         }
     }
+
+    /**
+     * Real bug found and fixed (#382): a peer disconnecting (or a send failing on a
+     * dead session) used to leave both connect controls disabled forever, with no way
+     * to reconnect short of restarting the app. Drives the actual production recovery
+     * path ([MainActivity.resetForNewConnection]) that both [receiveLoop]'s and
+     * `onSendClicked`'s `ChannelException` catch blocks now call -- not a
+     * reimplementation of the fix's logic.
+     */
+    @Test
+    fun aSessionLossReEnablesBothConnectControlsSoTheUserCanReconnectWithoutRestarting() {
+        ActivityScenario.launch(MainActivity::class.java).use { scenario ->
+            scenario.onActivity { activity ->
+                val startListening = activity.findViewById<Button>(R.id.start_listening_button)
+                val connect = activity.findViewById<Button>(R.id.connect_button)
+                val status = activity.findViewById<TextView>(R.id.connection_status_text)
+
+                // Mirrors onConnected()'s real effect of disabling both controls once
+                // a session is live.
+                startListening.isEnabled = false
+                connect.isEnabled = false
+
+                activity.resetForNewConnection("peer disconnected")
+
+                assertTrue(startListening.isEnabled)
+                assertTrue(connect.isEnabled)
+                assertTrue(status.text.toString() == "peer disconnected")
+            }
+        }
+    }
 }
