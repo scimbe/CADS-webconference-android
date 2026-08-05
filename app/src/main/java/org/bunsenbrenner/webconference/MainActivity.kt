@@ -10,7 +10,9 @@ import android.widget.ScrollView
 import android.widget.TextView
 import androidx.appcompat.app.AppCompatActivity
 import androidx.lifecycle.lifecycleScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import uniffi.native_bridge.ChannelException
 import uniffi.native_bridge.ChannelIdentity
 import uniffi.native_bridge.ChannelSession
@@ -30,9 +32,11 @@ import uniffi.native_bridge.newTextMessage
  *
  * Still deliberately minimal: direct-address only (both sides exchange public
  * key/address out of band -- copy/paste between two devices), no broker-mediated
- * discovery, no message persistence (Room) yet -- those are their own later, separate
- * increments (see the run's own backlog). What's here is real, not a mock: every
- * button drives an actual `uniffi.native_bridge` FFI call into `libnative_bridge.so`.
+ * discovery yet (see the run's own backlog). Message history IS now really
+ * persisted locally (see [MessageStore]), closing the last piece of the run's
+ * declared M1 milestone alongside this connect/send/receive flow. What's here is
+ * real, not a mock: every button drives an actual `uniffi.native_bridge` FFI call
+ * into `libnative_bridge.so`.
  *
  * Every native call is guarded with the same [LinkageError] fallback the earlier
  * scaffold established (`nativeBridgeStatusLine`'s doc comment): `libnative_bridge.so`
@@ -47,6 +51,7 @@ class MainActivity : AppCompatActivity() {
     private var myPublicKeyHex: String = ""
     private var session: ChannelSession? = null
 
+    private lateinit var messageStore: MessageStore
     private lateinit var identityText: TextView
     private lateinit var startListeningButton: Button
     private lateinit var peerPublicKeyInput: EditText
@@ -59,8 +64,18 @@ class MainActivity : AppCompatActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        messageStore = MessageStore(this)
         setContentView(buildLayout())
         initializeChannelIdentity()
+        loadPersistedHistory()
+    }
+
+    /** Real persisted history from a previous session, rendered before anything new arrives. */
+    private fun loadPersistedHistory() {
+        lifecycleScope.launch {
+            val history = withContext(Dispatchers.IO) { messageStore.loadAll() }
+            history.forEach { renderMessage(it.body, it.direction) }
+        }
     }
 
     /**
@@ -212,7 +227,8 @@ class MainActivity : AppCompatActivity() {
         try {
             while (true) {
                 val msg = activeSession.recvText()
-                appendMessage(getString(R.string.message_line_received, msg.body))
+                withContext(Dispatchers.IO) { messageStore.insert(msg, MessageDirection.RECEIVED) }
+                renderMessage(msg.body, MessageDirection.RECEIVED)
             }
         } catch (e: ChannelException) {
             connectionStatusText.text = getString(R.string.disconnected, e.message)
@@ -227,7 +243,8 @@ class MainActivity : AppCompatActivity() {
             try {
                 val msg = newTextMessage(myPublicKeyHex, body)
                 activeSession.sendText(msg)
-                appendMessage(getString(R.string.message_line_sent, body))
+                withContext(Dispatchers.IO) { messageStore.insert(msg, MessageDirection.SENT) }
+                renderMessage(msg.body, MessageDirection.SENT)
                 messageInput.text.clear()
             } catch (e: ChannelException) {
                 connectionStatusText.text = getString(R.string.disconnected, e.message)
@@ -235,7 +252,13 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun appendMessage(line: String) {
+    /** Pure UI append -- persistence is a separate, explicit call at each real call site
+     * ([onSendClicked], [receiveLoop], [loadPersistedHistory]), never implied by this. */
+    private fun renderMessage(body: String, direction: MessageDirection) {
+        val line = when (direction) {
+            MessageDirection.SENT -> getString(R.string.message_line_sent, body)
+            MessageDirection.RECEIVED -> getString(R.string.message_line_received, body)
+        }
         messagesText.text = if (messagesText.text.isEmpty()) line else "${messagesText.text}\n$line"
     }
 
