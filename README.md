@@ -18,9 +18,10 @@ for the real, iteration-by-iteration record of what built this and why).
   separate Kotlin Gradle plugin needed as of AGP 9.0).
 - ✅ Builds a real, signed debug APK (`./gradlew assembleDebug`), hermetically
   verified in `mingc/android-build-box`.
-- ✅ A real Robolectric unit test (`./gradlew testDebugUnitTest`) proves
-  `MainActivity` actually displays its status string, not just that the project
-  compiles.
+- ✅ Real Robolectric unit tests (`./gradlew testDebugUnitTest`, 14 total as of
+  this writing across `MainActivityTest`/`MessageStoreTest`/`TextMessageBridgeTest`)
+  exercise `MainActivity`'s real UI logic and Room persistence, not just that the
+  project compiles.
 - ✅ Continuous verification: [`.github/workflows/android-ci.yml`](.github/workflows/android-ci.yml)
   runs both on every push/PR against `main`; [Dependabot](.github/dependabot.yml)
   watches Gradle deps and Actions versions weekly, with vulnerability alerts and
@@ -51,19 +52,28 @@ for the real, iteration-by-iteration record of what built this and why).
   **This is a DIRECT peer-to-peer session, not the full Agent-Fabric
   channel-join** — no broker/rendezvous, no NAT traversal, no `:443` relay
   fallback; both sides must already know how to reach each other (out of
-  band). It has only been proven **local-process-to-local-process** (two
-  `cargo test` instances on one machine), NOT real device-to-device messaging
-  over a real network. See
-  [`docs/channel-join-options.md`](docs/channel-join-options.md) for the full
-  survey of what the real broker-mediated channel-join stack (`ct-agent`'s
-  `channel.rs`/`channel_run.rs`) looks like and why this increment doesn't
-  build on it yet.
-- ⏸ **`MainActivity` is still a placeholder `TextView`, not a working
-  client.** It does not yet call any of `channel.rs`'s new exports — wiring a
-  real UI (address/key entry, a message list, Room persistence) is a
-  separate, later backlog item — see
-  [CADS-Tunnel#382](https://github.com/scimbe/CADS-Tunnel/issues/382) for the
-  full context.
+  band). See [`docs/channel-join-options.md`](docs/channel-join-options.md)
+  for the full survey of what the real broker-mediated channel-join stack
+  (`ct-agent`'s `channel.rs`/`channel_run.rs`) looks like and why this
+  increment doesn't build on it yet.
+- ✅ **`MainActivity` is a real, working chat client, not a placeholder.**
+  It calls `channel.rs`'s exports directly: generates a real identity on
+  launch, `bindChannelListener`/`dialChannelDirect` to connect, a real send/receive
+  message thread, and message history persisted locally via Room
+  (`MessageStore`) across app restarts. Several DAU-lens passes have since
+  hardened it against careless input (validating connect fields before any
+  native call, real feedback instead of silent no-ops on an empty Send, a
+  peer disconnect no longer permanently disabling reconnecting) — see recent
+  commit history. **The run's own declared M1 milestone ("1:1 Text-Messaging
+  end-to-end") has been confirmed for real**: two separately-booted, real KVM
+  Android emulator instances, each running this actual compiled app with a
+  distinct Noise_IK identity, connected directly and exchanged a real message
+  — cross-checked screenshots from both devices, not just one side's claim
+  (see [CADS-devsystem issue #13](https://github.com/scimbe/CADS-devsystem/issues/13)
+  and `docs/emulator-walkthrough/` for the real evidence). This is genuine
+  device-to-device messaging through the compiled app, not just a `cargo
+  test` integration test between two local processes — though still direct-
+  address only, per the channel-join caveat above.
 
 ## Building
 
