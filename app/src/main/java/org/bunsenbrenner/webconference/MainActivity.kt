@@ -264,7 +264,17 @@ class MainActivity : AppCompatActivity() {
             messageInput.requestFocus()
             return
         }
-        val activeSession = session ?: return
+        // Real gap found live (#382, DAU lens): a real, non-blank message typed
+        // before ever connecting to a peer used to hit `session ?: return` here
+        // and vanish completely -- no status update, nothing in the message
+        // thread, no indication anything happened at all. A user who hasn't
+        // read the connection status text has no way to tell "not connected"
+        // apart from "the app is broken." The message itself is preserved (not
+        // cleared), so retrying after connecting doesn't require retyping it.
+        val activeSession = session ?: run {
+            connectionStatusText.text = getString(R.string.not_connected_message_not_sent)
+            return
+        }
         lifecycleScope.launch {
             try {
                 val msg = newTextMessage(myPublicKeyHex, body)

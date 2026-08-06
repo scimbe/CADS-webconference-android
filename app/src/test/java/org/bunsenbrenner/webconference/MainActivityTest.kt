@@ -179,4 +179,32 @@ class MainActivityTest {
             }
         }
     }
+
+    /**
+     * Real gap found live (#382, DAU lens): a real, non-blank message typed
+     * before ever connecting to a peer used to hit `session ?: return` and
+     * vanish completely -- no status text update, nothing rendered, no
+     * indication anything happened. `session` is always null under Robolectric
+     * (real `libnative_bridge.so` can't load here), which is exactly what makes
+     * this path reachable in this test environment, the same real production
+     * ordering the blank-message test above relies on.
+     */
+    @Test
+    fun sendingARealMessageBeforeConnectingGetsRealFeedbackNotSilentFailure() {
+        ActivityScenario.launch(MainActivity::class.java).use { scenario ->
+            scenario.onActivity { activity ->
+                val messageInput = activity.findViewById<EditText>(R.id.message_input)
+                val send = activity.findViewById<Button>(R.id.send_button)
+                val status = activity.findViewById<TextView>(R.id.connection_status_text)
+                val messages = activity.findViewById<TextView>(R.id.messages_text)
+                val required = activity.getString(R.string.not_connected_message_not_sent)
+
+                messageInput.setText("hello, anyone there?")
+                send.performClick()
+                assertTrue("a real status message must explain why nothing was sent", status.text.toString() == required)
+                assertTrue("a no-op tap must never render a message", messages.text.toString().isEmpty())
+                assertTrue("the typed message must be preserved, not silently cleared", messageInput.text.toString() == "hello, anyone there?")
+            }
+        }
+    }
 }
