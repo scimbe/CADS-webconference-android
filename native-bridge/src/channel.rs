@@ -182,11 +182,30 @@ pub struct ChannelSession {
     write: Mutex<OwnedWriteHalf>,
     read: Mutex<OwnedReadHalf>,
     transport: Mutex<TransportState>,
+    /// The peer's real, Noise_IK-authenticated static public key, when this session actually
+    /// knows it -- `Some` on the dialer/initiator side (it's the caller-supplied,
+    /// handshake-pinned `peer_public_key_hex` `dial_channel_direct` already verified: a wrong
+    /// key fails the handshake outright, so reaching a live session means this key is real,
+    /// not just claimed). `None` on the listener/responder side: `ct_common::a2a::a2a_respond`
+    /// (pinned dependency, a separate repo) learns the initiator's static key internally during
+    /// the handshake but does not return it, only the resulting `TransportState` -- so there is
+    /// genuinely nothing authenticated to pin here today. Closing that side needs an upstream
+    /// `ct_common::a2a` change, correctly scoped as its own separate increment, not guessed at
+    /// or worked around by re-implementing the raw Noise handshake here.
+    ///
+    /// Real gap found live 2026-08-07 (#382 goal doc §8, DAU lens): [`TextMessage::sender_pubkey`]
+    /// on a received message was, until this fix, taken verbatim from the wire -- entirely
+    /// self-reported by whoever sent it, never checked against anything the receiving side
+    /// actually authenticated. Harmless today only because nothing in the GUI currently trusts
+    /// this field for anything (message direction alone drives rendering) -- but a forged value
+    /// would have been silently accepted the moment that changes (e.g. real multi-peer display).
+    /// [`Self::recv_text`] now overrides it with this real, known key whenever one is available.
+    known_peer_public_key_hex: Option<String>,
 }
 
 impl ChannelSession {
-    fn new(read: OwnedReadHalf, write: OwnedWriteHalf, transport: TransportState) -> Arc<Self> {
-        Arc::new(Self { write: Mutex::new(write), read: Mutex::new(read), transport: Mutex::new(transport) })
+    fn new(read: OwnedReadHalf, write: OwnedWriteHalf, transport: TransportState, known_peer_public_key_hex: Option<String>) -> Arc<Self> {
+        Arc::new(Self { write: Mutex::new(write), read: Mutex::new(read), transport: Mutex::new(transport), known_peer_public_key_hex })
     }
 }
 
@@ -237,7 +256,14 @@ impl ChannelSession {
             plaintext.truncate(n);
             plaintext
         };
-        Ok(decode_text_message(bytes)?)
+        let mut message = decode_text_message(bytes)?;
+        // See `known_peer_public_key_hex`'s own doc comment: override the wire's
+        // self-reported value with the real, authenticated key whenever this
+        // session actually knows one, rather than trusting an unverified claim.
+        if let Some(real_key) = &self.known_peer_public_key_hex {
+            message.sender_pubkey = real_key.clone();
+        }
+        Ok(message)
     }
 }
 
@@ -261,7 +287,11 @@ pub async fn dial_channel_direct(
     let transport = a2a_initiate(&mut write, &mut read, &identity.keypair.private, &peer_public_key)
         .await
         .map_err(|e| ChannelError::Handshake { reason: e.to_string() })?;
-    Ok(ChannelSession::new(read, write, transport))
+    // Canonical lowercase-hex re-encoding of the real, decoded, handshake-pinned key -- not
+    // the raw caller-supplied string verbatim, so a caller passing mixed-case hex (still valid
+    // input to hex_decode_32) can never produce a sender_pubkey that fails a later byte-exact
+    // comparison against generate_noise_public_key_hex()'s own always-lowercase output.
+    Ok(ChannelSession::new(read, write, transport, Some(hex_encode_32(&peer_public_key))))
 }
 
 /// A bound TCP listener waiting to accept exactly one direct channel session. Split from
@@ -300,7 +330,10 @@ impl ChannelListener {
         let transport = a2a_respond(&mut write, &mut read, &identity.keypair.private)
             .await
             .map_err(|e| ChannelError::Handshake { reason: e.to_string() })?;
-        Ok(ChannelSession::new(read, write, transport))
+        // `None`: see `known_peer_public_key_hex`'s own doc comment -- a2a_respond doesn't
+        // hand back the initiator's key it authenticated internally, so there is nothing real
+        // to pin here yet. recv_text falls back to the wire's own (unverified) value.
+        Ok(ChannelSession::new(read, write, transport, None))
     }
 }
 
@@ -357,6 +390,46 @@ mod tests {
         responder_session.send_text(reply.clone()).await.expect("send from responder");
         let received_reply = initiator_session.recv_text().await.expect("recv on initiator");
         assert_eq!(received_reply, reply, "the initiator decrypts exactly what the responder sent");
+    }
+
+    #[tokio::test]
+    /// Real gap found live 2026-08-07 (#382 goal doc §8, DAU lens): `TextMessage::sender_pubkey`
+    /// used to be taken verbatim from the wire, entirely self-reported -- nothing checked it
+    /// against anything the receiving side actually authenticated during the real Noise_IK
+    /// handshake. Proves the fix on the one side that can be closed within this crate alone (the
+    /// dialer/initiator already has the peer's handshake-pinned key in scope; see
+    /// `known_peer_public_key_hex`'s own doc comment for why the listener/responder side is a
+    /// separate, correctly-scoped gap that needs an upstream `ct_common::a2a` change instead):
+    /// the responder sends a real message with a deliberately FORGED `sender_pubkey`, and the
+    /// initiator's `recv_text` must return the real, authenticated key, not the forged claim.
+    async fn recv_text_on_the_initiator_side_overrides_a_forged_sender_pubkey_with_the_real_authenticated_key() {
+        let responder_identity = generate_channel_identity();
+        let initiator_identity = generate_channel_identity();
+        let impostor_identity = generate_channel_identity(); // whose key the responder will falsely claim
+
+        let listener = bind_channel_listener("127.0.0.1:0".to_string()).await.expect("bind");
+        let bound_addr = listener.local_addr().expect("local_addr");
+        let responder_public_hex = responder_identity.public_key_hex();
+        let impostor_public_hex = impostor_identity.public_key_hex();
+
+        let accept_task = tokio::spawn({
+            let responder_identity = responder_identity.clone();
+            async move { listener.accept(responder_identity).await }
+        });
+        let initiator_session = dial_channel_direct(initiator_identity, responder_public_hex.clone(), bound_addr)
+            .await
+            .expect("initiator completes the handshake");
+        let responder_session = accept_task.await.expect("accept task").expect("responder completes the handshake");
+
+        // The responder deliberately lies about who it is -- a real, well-formed TextMessage
+        // whose sender_pubkey claims to be the impostor's key, not the responder's own real one.
+        let forged = crate::message::new_text_message(impostor_public_hex.clone(), "trust me, I'm someone else".to_string());
+        responder_session.send_text(forged.clone()).await.expect("send from responder");
+
+        let received = initiator_session.recv_text().await.expect("recv on initiator");
+        assert_ne!(received.sender_pubkey, impostor_public_hex, "the forged claim must never survive to the caller");
+        assert_eq!(received.sender_pubkey, responder_public_hex, "must be overridden with the real, handshake-authenticated key");
+        assert_eq!(received.body, forged.body, "only sender_pubkey is overridden -- the real message content is untouched");
     }
 
     /// The real deadlock (labor-setup.com, issue #13), reproduced and proven fixed: starts
