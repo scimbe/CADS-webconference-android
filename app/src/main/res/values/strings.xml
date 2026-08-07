@@ -23,6 +23,11 @@
     <string name="empty_message_not_sent">Type a message before tapping Send.</string>
     <string name="not_connected_message_not_sent">Not connected to a peer yet -- start listening or connect first.</string>
     <string name="send">Send</string>
-    <string name="message_line_sent">me: %1$s</string>
+    <!-- Requirement #4's first bounded slice: a real, explicit per-message status, not
+         implied by an unmarked line. "sent" is honestly the strongest claim this direct,
+         unacknowledged channel can make -- "delivered"/"read" need a real receipt
+         protocol, separate future work (see MessageStatus's own doc comment). -->
+    <string name="message_line_sent">me: %1$s ✓ sent</string>
+    <string name="message_line_sent_failed">me: %1$s ⚠ failed to send</string>
     <string name="message_line_received">peer: %1$s</string>
 </resources>

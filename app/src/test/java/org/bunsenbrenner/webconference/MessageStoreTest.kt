@@ -56,6 +56,35 @@ class MessageStoreTest {
     }
 
     @Test
+    /** Requirement #4's first bounded slice: a real, persisted per-message status
+     * round-trips through the real database, and a [MessageDirection.RECEIVED] row
+     * (which never carries a status) reloads honestly as `null`, not a fabricated value. */
+    fun sentMessageStatusRoundTripsRealAndReceivedMessagesHaveNoStatus() {
+        val store = MessageStore(ApplicationProvider.getApplicationContext())
+        store.insert(message("ok", "aa", 1u, "went through"), MessageDirection.SENT, MessageStatus.SENT)
+        store.insert(message("bad", "aa", 2u, "never made it"), MessageDirection.SENT, MessageStatus.FAILED)
+        store.insert(message("rx", "bb", 3u, "from the peer"), MessageDirection.RECEIVED)
+
+        val history = store.loadAll()
+        assertEquals(listOf(MessageStatus.SENT, MessageStatus.FAILED, null), history.map { it.status })
+    }
+
+    @Test
+    /** A retried send (the same real msg_id, now succeeding) must overwrite the earlier
+     * FAILED row's status too, not just its body -- the same real CONFLICT_REPLACE
+     * contract [insertingTheSameMsgIdTwiceReplacesRatherThanDuplicatesOrCrashes] already
+     * proves for body, extended to status now that a row can carry one. */
+    fun retryingAFailedSendReplacesItsStatusNotJustItsBody() {
+        val store = MessageStore(ApplicationProvider.getApplicationContext())
+        store.insert(message("retry", "aa", 1u, "first attempt"), MessageDirection.SENT, MessageStatus.FAILED)
+        store.insert(message("retry", "aa", 1u, "first attempt"), MessageDirection.SENT, MessageStatus.SENT)
+
+        val history = store.loadAll()
+        assertEquals(1, history.size)
+        assertEquals(MessageStatus.SENT, history[0].status)
+    }
+
+    @Test
     fun historyReallyPersistsAcrossReopeningTheStore() {
         val context = ApplicationProvider.getApplicationContext<android.content.Context>()
         MessageStore(context).use { it.insert(message("p", "aa", 1u, "persisted across reopen"), MessageDirection.RECEIVED) }

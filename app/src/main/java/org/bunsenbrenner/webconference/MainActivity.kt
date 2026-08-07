@@ -93,7 +93,7 @@ class MainActivity : AppCompatActivity() {
     private fun loadPersistedHistory() {
         lifecycleScope.launch {
             val history = withContext(Dispatchers.IO) { messageStore.loadAll() }
-            history.forEach { renderMessage(it.body, it.direction) }
+            history.forEach { renderMessage(it.body, it.direction, it.status) }
         }
     }
 
@@ -259,7 +259,7 @@ class MainActivity : AppCompatActivity() {
             while (true) {
                 val msg = activeSession.recvText()
                 withContext(Dispatchers.IO) { messageStore.insert(msg, MessageDirection.RECEIVED) }
-                renderMessage(msg.body, MessageDirection.RECEIVED)
+                renderMessage(msg.body, MessageDirection.RECEIVED, null)
             }
         } catch (e: ChannelException) {
             resetForNewConnection(getString(R.string.disconnected, e.message))
@@ -294,13 +294,24 @@ class MainActivity : AppCompatActivity() {
             return
         }
         lifecycleScope.launch {
+            val msg = newTextMessage(myPublicKeyHex, body)
             try {
-                val msg = newTextMessage(myPublicKeyHex, body)
                 activeSession.sendText(msg)
-                withContext(Dispatchers.IO) { messageStore.insert(msg, MessageDirection.SENT) }
-                renderMessage(msg.body, MessageDirection.SENT)
+                withContext(Dispatchers.IO) { messageStore.insert(msg, MessageDirection.SENT, MessageStatus.SENT) }
+                renderMessage(msg.body, MessageDirection.SENT, MessageStatus.SENT)
                 messageInput.text.clear()
             } catch (e: ChannelException) {
+                // Real gap found live, requirement #4's first bounded slice: a failed
+                // send used to vanish completely -- no thread entry, nothing persisted,
+                // only the separate connection-status text changed. The user had no way
+                // to tell "this specific message never went out" from "it's still
+                // somewhere in flight." Now recorded and rendered as a real, honest
+                // FAILED entry in the thread itself, not silently dropped -- retyping
+                // and resending is still the real recovery path (no queue/retry
+                // mechanism exists), but at least the failure is visible where the
+                // message would have been.
+                withContext(Dispatchers.IO) { messageStore.insert(msg, MessageDirection.SENT, MessageStatus.FAILED) }
+                renderMessage(msg.body, MessageDirection.SENT, MessageStatus.FAILED)
                 resetForNewConnection(getString(R.string.disconnected, e.message))
             }
         }
@@ -323,10 +334,22 @@ class MainActivity : AppCompatActivity() {
     }
 
     /** Pure UI append -- persistence is a separate, explicit call at each real call site
-     * ([onSendClicked], [receiveLoop], [loadPersistedHistory]), never implied by this. */
-    private fun renderMessage(body: String, direction: MessageDirection) {
+     * ([onSendClicked], [receiveLoop], [loadPersistedHistory]), never implied by this.
+     * [status] is real, honest per-message state (requirement #4's first bounded slice --
+     * see [MessageStatus]'s own doc comment for what it does and does not yet claim) --
+     * always `null` for [MessageDirection.RECEIVED]. */
+    private fun renderMessage(body: String, direction: MessageDirection, status: MessageStatus?) {
         val line = when (direction) {
-            MessageDirection.SENT -> getString(R.string.message_line_sent, body)
+            MessageDirection.SENT -> when (status) {
+                MessageStatus.FAILED -> getString(R.string.message_line_sent_failed, body)
+                // SENT (the real, expected case for anything already persisted) and the
+                // impossible `null` case (a SENT row must always carry a real status --
+                // see insert()'s own contract) both render as the plain sent line;
+                // `null` is not reachable from real code but a `when` here must still
+                // be exhaustive, and defaulting to the honest, unremarkable case is
+                // safer than a fabricated guess at which status was meant.
+                else -> getString(R.string.message_line_sent, body)
+            }
             MessageDirection.RECEIVED -> getString(R.string.message_line_received, body)
         }
         messagesText.text = if (messagesText.text.isEmpty()) line else "${messagesText.text}\n$line"
