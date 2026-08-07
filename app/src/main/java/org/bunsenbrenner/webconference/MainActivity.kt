@@ -52,7 +52,10 @@ class MainActivity : AppCompatActivity() {
     private var myPublicKeyHex: String = ""
     private var session: ChannelSession? = null
 
-    private lateinit var messageStore: MessageStore
+    // internal, not private -- the real test proving onDestroy() actually closes this needs to
+    // reach the live SQLiteDatabase handle directly, the same real visibility precedent
+    // resetForNewConnection below already established for this test class.
+    internal lateinit var messageStore: MessageStore
     private lateinit var identityText: TextView
     private lateinit var startListeningButton: Button
     private lateinit var peerPublicKeyInput: EditText
@@ -69,6 +72,21 @@ class MainActivity : AppCompatActivity() {
         setContentView(buildLayout())
         initializeChannelIdentity()
         loadPersistedHistory()
+    }
+
+    /**
+     * Real gap found live (#382, DAU lens -- surfaced by `devsystem.assistant`, independently
+     * corroborating a finding this run's own history had already flagged): [MessageStore] is a
+     * real [android.database.sqlite.SQLiteOpenHelper], which keeps a real, cacheable
+     * `SQLiteDatabase` handle open once `writableDatabase`/`readableDatabase` is first touched --
+     * nothing ever called `close()` on it. Every real `onCreate` (a config change, e.g. rotation,
+     * genuinely destroys and recreates the Activity) opened a fresh [MessageStore] backed by a
+     * fresh handle to the same on-disk file without ever releasing the previous one, a real,
+     * unbounded per-instance leak over the process's lifetime.
+     */
+    override fun onDestroy() {
+        messageStore.close()
+        super.onDestroy()
     }
 
     /** Real persisted history from a previous session, rendered before anything new arrives. */

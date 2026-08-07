@@ -3,7 +3,9 @@ package org.bunsenbrenner.webconference
 import android.widget.Button
 import android.widget.EditText
 import android.widget.TextView
+import androidx.lifecycle.Lifecycle
 import androidx.test.core.app.ActivityScenario
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -206,5 +208,27 @@ class MainActivityTest {
                 assertTrue("the typed message must be preserved, not silently cleared", messageInput.text.toString() == "hello, anyone there?")
             }
         }
+    }
+
+    /**
+     * Real gap found live (#382, DAU lens -- surfaced by `devsystem.assistant`, independently
+     * corroborating a finding this run's own history had already flagged): [MessageStore] never
+     * had its real [android.database.sqlite.SQLiteDatabase] handle closed on Activity teardown.
+     * Drives the actual production path ([MainActivity.onDestroy] calling the real
+     * [MessageStore.close]) against the real handle -- not a reimplementation of the fix's own
+     * logic, and not merely "onDestroy runs without crashing" (which would pass even if the
+     * fix did nothing at all).
+     */
+    @Test
+    fun onDestroyClosesTheMessageStoreAndTheRealDatabaseHandleReportsClosed() {
+        val scenario = ActivityScenario.launch(MainActivity::class.java)
+        var handle: android.database.sqlite.SQLiteDatabase? = null
+        scenario.onActivity { activity -> handle = activity.messageStore.writableDatabase }
+        val db = handle!!
+        assertTrue("sanity check: the real handle must actually be open before teardown", db.isOpen)
+
+        scenario.moveToState(Lifecycle.State.DESTROYED)
+
+        assertFalse("onDestroy must have closed the real database handle, not left it open", db.isOpen)
     }
 }
