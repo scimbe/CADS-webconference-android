@@ -18,6 +18,12 @@
     <string name="connecting">Connecting…</string>
     <string name="connected">Connected -- real Noise_IK session established</string>
     <string name="connection_failed">Connection failed: %1$s</string>
+    <!-- Requirement #17: the peer key is the one field a user hand-copies between two
+         devices, so a bad paste is the ordinary case, not the exotic one. The native
+         side's own reason string is a developer-facing detail ("byte index 2 is not a
+         char boundary" being the worst of them); what the user needs is what to fix. -->
+    <string name="invalid_peer_key">That peer public key isn\'t valid. It must be exactly 64 hexadecimal characters (0-9, a-f) -- check for a truncated or mistyped paste.</string>
+    <string name="connection_failed_unexpected">Connection failed unexpectedly. Please check the peer key and address and try again.</string>
     <string name="disconnected">Disconnected: %1$s</string>
     <string name="message_hint">Message</string>
     <string name="empty_message_not_sent">Type a message before tapping Send.</string>
