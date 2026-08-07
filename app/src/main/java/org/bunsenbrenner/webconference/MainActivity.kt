@@ -11,6 +11,7 @@ import android.widget.TextView
 import androidx.annotation.VisibleForTesting
 import androidx.appcompat.app.AppCompatActivity
 import androidx.lifecycle.lifecycleScope
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -237,11 +238,35 @@ class MainActivity : AppCompatActivity() {
                 session = newSession
                 onConnected()
                 receiveLoop(newSession)
+            } catch (e: ChannelException.InvalidPeerKey) {
+                // A mistyped/truncated peer key is ordinary user error, so it gets its own
+                // actionable, localized message instead of being folded into the generic
+                // "Connection failed: <native reason string>" line.
+                connectionStatusText.text = getString(R.string.invalid_peer_key)
+                connectButton.isEnabled = true
             } catch (e: ChannelException) {
                 connectionStatusText.text = getString(R.string.connection_failed, e.message)
                 connectButton.isEnabled = true
             } catch (e: LinkageError) {
                 connectionStatusText.text = getString(R.string.connection_failed, e.message)
+                connectButton.isEnabled = true
+            } catch (e: CancellationException) {
+                // Catching Exception below would otherwise swallow ordinary coroutine
+                // cancellation (the Activity being destroyed mid-dial) and treat it as a
+                // connection failure.
+                throw e
+            } catch (e: Exception) {
+                // Requirement #17: a Rust-side panic does NOT arrive as a ChannelException --
+                // UniFFI's generated call wrapper turns it into `InternalException("Rust
+                // panic")`, which is a plain kotlin.Exception. Before this catch existed such
+                // a panic escaped the lifecycleScope coroutine uncaught and took the process
+                // down, so a native bug anywhere under dialChannelDirect crashed the app
+                // instead of surfacing here. The native defect that proved this (hex_decode_32
+                // slicing a &str at non-char-boundary byte offsets) is fixed in
+                // native-bridge/src/channel.rs, but the catch is what keeps the next one from
+                // being fatal too. The user-visible text is deliberately generic: an internal
+                // panic message is not something a user can act on.
+                connectionStatusText.text = getString(R.string.connection_failed_unexpected)
                 connectButton.isEnabled = true
             }
         }

@@ -123,18 +123,37 @@ fn hex_encode_32(bytes: &[u8; 32]) -> String {
 /// `ct-agent`'s own `channel.rs::decode_hex_32` convention (same lowercase-hex profile
 /// `generate_noise_public_key_hex` already returns), but returns a typed [`ChannelError`]
 /// instead of `Option` since this is a real FFI input-validation boundary.
+///
+/// The guard counts CHARACTERS, not bytes, and rejects the whole string up front unless every
+/// character is in the hex alphabet. That is load-bearing, not defensive style: the previous
+/// version gated on `str::len()` (a BYTE count) and then indexed the same `&str` by byte range
+/// (`&s[2 * i..2 * i + 2]`). A 64-BYTE key containing any multi-byte UTF-8 character therefore
+/// passed the length check and then landed a slice endpoint mid-character, and range-indexing a
+/// `str` at a non-char-boundary panics -- an abort unwinding across the FFI boundary out of real
+/// user input (the peer-key text field), not a handled error. Validating the alphabet first also
+/// makes every index below provably single-byte ASCII.
 fn hex_decode_32(s: &str) -> Result<[u8; 32], ChannelError> {
-    if s.len() != 64 {
+    let digits: Vec<char> = s.chars().collect();
+    if digits.len() != 64 {
         return Err(ChannelError::InvalidPeerKey {
-            reason: format!("expected 64 lowercase-hex characters, got {} characters", s.len()),
+            reason: format!("expected 64 lowercase-hex characters, got {} characters", digits.len()),
         });
     }
     let mut out = [0u8; 32];
     for (i, b) in out.iter_mut().enumerate() {
-        *b = u8::from_str_radix(&s[2 * i..2 * i + 2], 16)
-            .map_err(|e| ChannelError::InvalidPeerKey { reason: e.to_string() })?;
+        let hi = hex_digit(digits[2 * i])?;
+        let lo = hex_digit(digits[2 * i + 1])?;
+        *b = (hi << 4) | lo;
     }
     Ok(out)
+}
+
+/// Accepts the same alphabet `u8::from_str_radix(_, 16)` did (so an uppercase-hex key a user
+/// pasted from elsewhere keeps working), but as a total function over `char` -- no slicing.
+fn hex_digit(c: char) -> Result<u8, ChannelError> {
+    c.to_digit(16).map(|d| d as u8).ok_or_else(|| ChannelError::InvalidPeerKey {
+        reason: format!("{c:?} is not a hexadecimal character"),
+    })
 }
 
 fn parse_socket_addr(s: &str) -> Result<SocketAddr, ChannelError> {
@@ -527,5 +546,69 @@ mod tests {
             Err(other) => panic!("expected InvalidAddress, got a different ChannelError: {other}"),
             Ok(_) => panic!("a malformed address must be rejected, not accepted"),
         }
+    }
+
+    /// Regression test for the real defect found at devsystem.review (run webconference-android,
+    /// iteration 22), tracked as requirement #17. `hex_decode_32` used to gate on `str::len()`
+    /// -- a BYTE count -- and then index the same `&str` by byte range, so a 64-BYTE key holding
+    /// a multi-byte UTF-8 character passed the length check and then panicked on a
+    /// non-char-boundary slice index ("byte index 2 is not a char boundary"). This is the exact
+    /// repro from that review: U+20AC EURO SIGN (3 bytes, 1 character) + 61 ASCII characters is
+    /// 64 BYTES but only 62 CHARACTERS. Before the fix this test aborts the process instead of
+    /// failing an assertion; after it, the input is a plain typed error.
+    #[test]
+    fn hex_decode_32_rejects_a_64_byte_multi_byte_utf8_key_instead_of_panicking() {
+        let key = format!("\u{20ac}{}", "a".repeat(61));
+        assert_eq!(key.len(), 64, "the repro must be exactly 64 BYTES to reach the old byte-slice path");
+        assert_eq!(key.chars().count(), 62, "...while being only 62 CHARACTERS");
+
+        match hex_decode_32(&key) {
+            Err(ChannelError::InvalidPeerKey { .. }) => {}
+            Err(other) => panic!("expected InvalidPeerKey, got a different ChannelError: {other}"),
+            Ok(_) => panic!("a 62-character key must never decode to 32 bytes"),
+        }
+    }
+
+    /// The other half of the same bug class: a key that IS 64 characters but carries a
+    /// non-ASCII character. Character-counting alone would let this through to the decode, so
+    /// hex-alphabet membership has to be checked too.
+    #[test]
+    fn hex_decode_32_rejects_a_64_character_key_containing_a_non_hex_character() {
+        for key in [
+            format!("{}\u{20ac}", "a".repeat(63)),  // multi-byte, in-bounds by character count
+            format!("{}z", "a".repeat(63)),          // plain ASCII, outside the hex alphabet
+            format!("{} ", "a".repeat(63)),          // a stray space from a sloppy paste
+        ] {
+            assert_eq!(key.chars().count(), 64, "each case must clear the character-count gate");
+            match hex_decode_32(&key) {
+                Err(ChannelError::InvalidPeerKey { .. }) => {}
+                Err(other) => panic!("expected InvalidPeerKey for {key:?}, got: {other}"),
+                Ok(_) => panic!("a non-hex character must be rejected: {key:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn hex_decode_32_rejects_keys_of_the_wrong_length_including_empty() {
+        for key in ["", "abcd", &"a".repeat(63), &"a".repeat(65), &"a".repeat(128)] {
+            match hex_decode_32(key) {
+                Err(ChannelError::InvalidPeerKey { .. }) => {}
+                Err(other) => panic!("expected InvalidPeerKey for a {}-char key, got: {other}", key.chars().count()),
+                Ok(_) => panic!("a {}-character key must be rejected", key.chars().count()),
+            }
+        }
+    }
+
+    /// The added validation must not be over-restrictive: the real, well-formed keys this app
+    /// actually produces (`ChannelIdentity::public_key_hex`, i.e. `hex_encode_32`) still decode,
+    /// byte-for-byte, and an uppercase-hex key -- which the previous `u8::from_str_radix`
+    /// implementation also accepted -- keeps working rather than silently becoming invalid.
+    #[test]
+    fn hex_decode_32_still_accepts_the_real_keys_this_app_produces() {
+        let bytes: [u8; 32] = core::array::from_fn(|i| (i as u8).wrapping_mul(7).wrapping_add(3));
+        let encoded = hex_encode_32(&bytes);
+        assert_eq!(encoded.chars().count(), 64);
+        assert_eq!(hex_decode_32(&encoded).expect("a real 64-char lowercase-hex key decodes"), bytes);
+        assert_eq!(hex_decode_32(&encoded.to_uppercase()).expect("uppercase hex still decodes"), bytes);
     }
 }
