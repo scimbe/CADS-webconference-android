@@ -33,6 +33,37 @@ jobs:
       - name: Build debug APK
         run: ./gradlew assembleDebug --no-daemon --stacktrace
 
+      # Real installability guard for the artifact this job publishes. The APK's
+      # packaged ABI set is not decided by us alone -- AGP packages a lib/<abi>/
+      # directory as soon as any dependency contributes a .so to it, and the JNA @aar
+      # contributes libjnidispatch.so for five ABIs we ship no native bridge for. A
+      # device on one of those ABIs installs the app and then dies with
+      # UnsatisfiedLinkError on the first FFI call, which no unit test and no
+      # `assembleDebug` exit code can see. This step makes that invariant a build
+      # failure: the packaged ABI set must equal the jniLibs ABI set, and every
+      # packaged ABI must really carry libnative_bridge.so.
+      - name: Verify every packaged ABI carries the native bridge
+        run: |
+          set -euo pipefail
+          apk=app/build/outputs/apk/debug/app-debug.apk
+          packaged="$(unzip -Z1 "$apk" 'lib/*' | cut -d/ -f2 | sort -u)"
+          shipped="$(ls app/src/main/jniLibs | sort -u)"
+          echo "packaged in the APK : $(echo $packaged)"
+          echo "shipped in jniLibs  : $(echo $shipped)"
+          if [ "$packaged" != "$shipped" ]; then
+            echo "MISMATCH -- the APK packages an ABI directory we ship no libnative_bridge.so for"
+            echo "(or jniLibs holds an ABI that never reaches the APK). A device on such an ABI"
+            echo "installs this APK and then fails with UnsatisfiedLinkError on the first FFI call."
+            echo "Fix by adjusting defaultConfig.ndk.abiFilters in app/build.gradle.kts and/or jniLibs."
+            diff <(echo "$packaged") <(echo "$shipped") || true
+            exit 1
+          fi
+          for abi in $packaged; do
+            unzip -Z1 "$apk" "lib/$abi/libnative_bridge.so" | grep -q . \
+              || { echo "MISSING: lib/$abi/libnative_bridge.so is not in the APK"; exit 1; }
+          done
+          echo "OK: packaged ABI set == shipped native-bridge ABI set, each with libnative_bridge.so"
+
       - name: Upload debug APK
         uses: actions/upload-artifact@v7
         with:
