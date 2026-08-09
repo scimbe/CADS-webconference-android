@@ -22,6 +22,8 @@ android {
         versionCode = 1
         versionName = "0.1.0-scaffold"
 
+        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+
         // The app can only ever run on an ABI we actually ship libnative_bridge.so for
         // -- app/src/main/jniLibs/ holds exactly arm64-v8a and x86_64, and every
         // channel/message call in MainActivity goes through that library. Without this
@@ -118,4 +120,15 @@ dependencies {
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.robolectric:robolectric:4.16.1")
     testImplementation("androidx.test:core:1.6.1")
+
+    // Real instrumented (on-device/emulator) tests, requirement #17's own last
+    // remaining criterion: proving the UI actually survives a malicious peer-key
+    // paste, not just that the underlying native function returns an error (which
+    // native-bridge/src/channel.rs's own unit tests already cover) -- Robolectric
+    // above can't exercise the real UniFFI/JNI call path, only a real device or
+    // emulator can.
+    androidTestImplementation("androidx.test.ext:junit:1.2.1")
+    androidTestImplementation("androidx.test.espresso:espresso-core:3.6.1")
+    androidTestImplementation("androidx.test:runner:1.6.2")
+    androidTestImplementation("androidx.test:rules:1.6.1")
 }

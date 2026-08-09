@@ -187,6 +187,51 @@ jobs:
             adb shell pm list packages | grep -q org.bunsenbrenner.webconference || (echo "APK reported a successful install but the package is not listed on the device" && exit 1)
             echo "OK: the real release APK installed on a clean AVD and the package manager confirms it"
 
+  # Requirement #17 (#382 goal doc)'s own last remaining criterion: "An automated Android
+  # emulator test enters a non-ASCII peer key ..., asserts the app is still alive and
+  # showing the invalid-key error after the Connect tap." native-bridge/src/channel.rs's
+  # own unit tests (in build-and-test above) already prove hex_decode_32 itself returns a
+  # real error instead of panicking; this job proves the other, previously-unverified half
+  # -- that a real UniFFI/JNI call through the actual running app, on real device hardware,
+  # surfaces that error to a human instead of crashing the process. Robolectric (JVM-only)
+  # cannot exercise the real native call path, only a real device or emulator can.
+  verify-connect-flow-instrumented-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "17"
+          cache: gradle
+
+      - name: Grant execute permission for gradlew
+        run: chmod +x gradlew
+
+      - name: Enable KVM group perms
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      - name: Real instrumented test on a clean Android emulator (requirement #17)
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 29
+          arch: x86_64
+          target: default
+          disable-animations: true
+          script: ./gradlew connectedDebugAndroidTest --no-daemon --stacktrace
+
+      - name: Upload instrumented test report
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: instrumented-test-report
+          path: app/build/reports/androidTests/connected/
+
   verify-native-bridge:
     runs-on: ubuntu-latest
     # Real supply-chain check (#382): native-bridge/'s .so files and generated Kotlin
