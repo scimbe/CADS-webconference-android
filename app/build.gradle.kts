@@ -54,6 +54,17 @@ android {
     buildTypes {
         release {
             isMinifyEnabled = false
+            // Requirement #5 criterion 3 ("signed with a build key recorded in the
+            // run, installs via adb install with no manual signing step"). No
+            // dedicated release key is provisioned for this scaffold yet -- this
+            // reuses AGP's own well-known, deterministically-generated debug
+            // keystore rather than fabricating a "real" release identity that
+            // doesn't exist. Honestly recorded as exactly that in the CI build
+            // metadata this same firing adds, not hidden behind an unqualified
+            // "signed" claim. Provisioning a genuine, separately-held release key
+            // is real, separate, later work once this app is distributed for
+            // real, not something to invent unilaterally for a "0.1.0-scaffold".
+            signingConfig = signingConfigs.getByName("debug")
         }
     }
     compileOptions {
