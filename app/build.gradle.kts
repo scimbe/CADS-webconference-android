@@ -21,6 +21,34 @@ android {
         targetSdk = 35
         versionCode = 1
         versionName = "0.1.0-scaffold"
+
+        // The app can only ever run on an ABI we actually ship libnative_bridge.so for
+        // -- app/src/main/jniLibs/ holds exactly arm64-v8a and x86_64, and every
+        // channel/message call in MainActivity goes through that library. Without this
+        // filter the packaged ABI set is not ours to control: the JNA `@aar` dependency
+        // brings its own libjnidispatch.so for five further ABIs, and AGP packages an
+        // ABI directory as soon as *any* dependency contributes a .so to it.
+        //
+        // Measured on the real CI artifact, not assumed: app-debug.apk from run
+        // 31216211239 (commit 545ad74) contains seven lib/<abi>/ directories --
+        // arm64-v8a, armeabi, armeabi-v7a, mips, mips64, x86, x86_64 -- of which only
+        // arm64-v8a and x86_64 carry libnative_bridge.so. The other five hold nothing
+        // but libjnidispatch.so (640,396 bytes of payload that can never do any work).
+        //
+        // That is an install-then-crash bug, not just bloat. armeabi-v7a devices sit
+        // squarely inside minSdk 26's device range; on one of them the platform selects
+        // armeabi-v7a as the primary ABI, extracts only that directory, and the first
+        // FFI call dies with UnsatisfiedLinkError. Declaring the supported ABI set makes
+        // `adb install` / the store honestly refuse an unsupported device up front
+        // instead of handing the user an app that installs and then breaks.
+        //
+        // Enforced, not just fixed once: the Android CI workflow asserts after every
+        // assembleDebug that the APK's packaged ABI set equals the jniLibs ABI set and
+        // that each packaged ABI really carries libnative_bridge.so, so a future
+        // dependency reintroducing a stray ABI fails the build instead of shipping.
+        ndk {
+            abiFilters += listOf("arm64-v8a", "x86_64")
+        }
     }
 
     buildTypes {
