@@ -896,7 +896,7 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
     if (lib.uniffi_native_bridge_checksum_func_generate_channel_identity() != 27104) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_native_bridge_checksum_func_decode_text_message() != 48306) {
+    if (lib.uniffi_native_bridge_checksum_func_decode_text_message() != 62429) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_native_bridge_checksum_func_encode_text_message() != 58285) {
@@ -2456,6 +2456,25 @@ sealed class MessageDecodeException: kotlin.Exception() {
             get() = "reason=${ `reason` }"
     }
     
+    /**
+     * `bytes` is larger than [`MAX_MESSAGE_BYTES`] -- rejected before any real
+     * parsing work (UTF-8 validation, JSON decoding) is attempted on it, so a
+     * hostile peer announcing a huge frame can't spend real CPU/memory on this
+     * side just by sending one. `u64`, not `usize` -- UniFFI's `Lower`/`Lift`
+     * only cover fixed-width integer types, not the pointer-sized `usize`
+     * `bytes.len()` actually returns (a real compile error found live, not
+     * assumed: `usize` has no `uniffi::Lower` impl).
+     */
+    class TooLarge(
+        
+        val `size`: kotlin.ULong, 
+        
+        val `max`: kotlin.ULong
+        ) : MessageDecodeException() {
+        override val message
+            get() = "size=${ `size` }, max=${ `max` }"
+    }
+    
 
     
 
@@ -2481,6 +2500,10 @@ public object FfiConverterTypeMessageDecodeError : FfiConverterRustBuffer<Messag
             2 -> MessageDecodeException.Malformed(
                 FfiConverterString.read(buf),
                 )
+            3 -> MessageDecodeException.TooLarge(
+                FfiConverterULong.read(buf),
+                FfiConverterULong.read(buf),
+                )
             else -> throw RuntimeException("invalid error enum value, something is very wrong!!")
         }
     }
@@ -2497,6 +2520,12 @@ public object FfiConverterTypeMessageDecodeError : FfiConverterRustBuffer<Messag
                 4UL
                 + FfiConverterString.allocationSize(value.`reason`)
             )
+            is MessageDecodeException.TooLarge -> (
+                // Add the size for the Int that specifies the variant plus the size needed for all fields
+                4UL
+                + FfiConverterULong.allocationSize(value.`size`)
+                + FfiConverterULong.allocationSize(value.`max`)
+            )
         }
     }
 
@@ -2510,6 +2539,12 @@ public object FfiConverterTypeMessageDecodeError : FfiConverterRustBuffer<Messag
             is MessageDecodeException.Malformed -> {
                 buf.putInt(2)
                 FfiConverterString.write(value.`reason`, buf)
+                Unit
+            }
+            is MessageDecodeException.TooLarge -> {
+                buf.putInt(3)
+                FfiConverterULong.write(value.`size`, buf)
+                FfiConverterULong.write(value.`max`, buf)
                 Unit
             }
         }.let { /* this makes the `when` an expression, which ensures it is exhaustive */ }
@@ -2626,8 +2661,8 @@ public object FfiConverterTypeMessageDecodeError : FfiConverterRustBuffer<Messag
 
         /**
          * Decodes a [`TextMessage`] from its wire form. Never panics: malformed input
-         * (not UTF-8, not valid JSON, wrong shape, truncated) returns a real
-         * [`MessageDecodeError`] instead.
+         * (not UTF-8, not valid JSON, wrong shape, truncated, oversized) returns a
+         * real [`MessageDecodeError`] instead.
          */
     @Throws(MessageDecodeException::class) fun `decodeTextMessage`(`bytes`: kotlin.ByteArray): TextMessage {
             return FfiConverterTypeTextMessage.lift(

@@ -70,6 +70,18 @@ pub struct TextMessage {
     pub body: String,
 }
 
+/// Requirement #22 (development-system-goal.md, #382): a received frame is
+/// hostile untrusted input even though the Noise_IK session that carried it is
+/// authenticated -- an authenticated peer, or a compromised one, can still send
+/// an absurdly large body to drive this process out of memory. A real, named
+/// bound, not an implicit `serde_json` default: this is a plain-text 1:1
+/// messaging app with no attachment support yet (see this module's own doc
+/// comment), so a generous-for-real-prose-but-bounded limit is the honest
+/// choice -- roughly 32,000 words of UTF-8 text, far past anything a real
+/// human composes as one message, comfortably below anything that risks real
+/// memory pressure.
+pub const MAX_MESSAGE_BYTES: usize = 64 * 1024;
+
 /// Errors decoding a [`TextMessage`] off the wire. A real, typed error crossing
 /// the UniFFI boundary -- decoding attacker-controlled or truncated bytes must
 /// never panic across FFI (an unwinding panic across an `extern "C"` boundary is
@@ -82,6 +94,14 @@ pub enum MessageDecodeError {
     /// `bytes` was valid UTF-8 but not a well-formed `TextMessage` -- truncated,
     /// missing/extra fields, or a wrong JSON type for a field.
     Malformed { reason: String },
+    /// `bytes` is larger than [`MAX_MESSAGE_BYTES`] -- rejected before any real
+    /// parsing work (UTF-8 validation, JSON decoding) is attempted on it, so a
+    /// hostile peer announcing a huge frame can't spend real CPU/memory on this
+    /// side just by sending one. `u64`, not `usize` -- UniFFI's `Lower`/`Lift`
+    /// only cover fixed-width integer types, not the pointer-sized `usize`
+    /// `bytes.len()` actually returns (a real compile error found live, not
+    /// assumed: `usize` has no `uniffi::Lower` impl).
+    TooLarge { size: u64, max: u64 },
 }
 
 impl std::fmt::Display for MessageDecodeError {
@@ -92,6 +112,9 @@ impl std::fmt::Display for MessageDecodeError {
             }
             MessageDecodeError::Malformed { reason } => {
                 write!(f, "TextMessage bytes are not a well-formed message: {reason}")
+            }
+            MessageDecodeError::TooLarge { size, max } => {
+                write!(f, "TextMessage bytes ({size} bytes) exceed the real maximum of {max} bytes")
             }
         }
     }
@@ -139,10 +162,18 @@ pub fn encode_text_message(message: TextMessage) -> Vec<u8> {
 }
 
 /// Decodes a [`TextMessage`] from its wire form. Never panics: malformed input
-/// (not UTF-8, not valid JSON, wrong shape, truncated) returns a real
-/// [`MessageDecodeError`] instead.
+/// (not UTF-8, not valid JSON, wrong shape, truncated, oversized) returns a
+/// real [`MessageDecodeError`] instead.
 #[uniffi::export]
 pub fn decode_text_message(bytes: Vec<u8>) -> Result<TextMessage, MessageDecodeError> {
+    // Real requirement #22, checked first and cheaply (a length comparison,
+    // no allocation or scan of `bytes` itself) -- before the UTF-8 validation
+    // and JSON parse below, both of which do real work proportional to
+    // `bytes.len()`. A hostile peer's oversized frame is rejected without
+    // this process ever spending that work on it.
+    if bytes.len() > MAX_MESSAGE_BYTES {
+        return Err(MessageDecodeError::TooLarge { size: bytes.len() as u64, max: MAX_MESSAGE_BYTES as u64 });
+    }
     // Checked separately (rather than relying on serde_json's own UTF-8
     // handling) so the two real failure modes -- "not text at all" vs. "text
     // but not a well-formed message" -- are distinguishable to a caller, which
@@ -226,6 +257,54 @@ mod tests {
         let truncated = bytes[..bytes.len() / 2].to_vec();
         let err = decode_text_message(truncated).expect_err("truncated JSON must not decode");
         assert!(matches!(err, MessageDecodeError::Malformed { .. }));
+    }
+
+    /// Decoding a genuinely empty frame -- valid UTF-8 (the empty string always
+    /// is), but not valid JSON -- returns the real typed error, not a panic.
+    /// Requirement #22's own explicit hostile-frame case.
+    #[test]
+    fn decode_rejects_a_zero_length_frame_without_panicking() {
+        let err = decode_text_message(Vec::new()).expect_err("a zero-length frame must not decode");
+        assert!(matches!(err, MessageDecodeError::Malformed { .. }));
+    }
+
+    /// Requirement #22's own explicit hostile-frame case: a body of several
+    /// hundred MB. A real, large allocation (not a length claim without the
+    /// bytes behind it) -- proves the size check rejects genuinely oversized
+    /// input, not just a small over-the-limit example.
+    #[test]
+    fn decode_rejects_an_oversized_body_without_panicking() {
+        let huge = vec![b'a'; 200 * 1024 * 1024];
+        let err = decode_text_message(huge).expect_err("a several-hundred-MB frame must not decode");
+        match err {
+            MessageDecodeError::TooLarge { size, max } => {
+                assert_eq!(size, 200 * 1024 * 1024);
+                assert_eq!(max, MAX_MESSAGE_BYTES as u64);
+            }
+            other => panic!("expected TooLarge, got {other:?}"),
+        }
+    }
+
+    /// The real boundary: exactly `MAX_MESSAGE_BYTES` is not itself rejected
+    /// by the size check -- proves the check is `>`, not `>=`, and that a
+    /// message genuinely at the limit still reaches the real parse logic
+    /// (which then rejects it as `Malformed`, since a bare run of `a` bytes
+    /// isn't valid JSON either -- this test is only about the size gate, not
+    /// about producing a valid message at exactly the limit).
+    #[test]
+    fn decode_does_not_reject_a_frame_at_exactly_the_real_size_limit_on_size_alone() {
+        let at_limit = vec![b'a'; MAX_MESSAGE_BYTES];
+        let err = decode_text_message(at_limit).expect_err("not valid JSON, but not for being too large");
+        assert!(matches!(err, MessageDecodeError::Malformed { .. }), "a frame exactly at the limit must fail on JSON validity, not size");
+    }
+
+    /// One byte past the real limit is rejected on size alone, before any
+    /// parsing is attempted.
+    #[test]
+    fn decode_rejects_one_byte_past_the_real_size_limit() {
+        let over = vec![b'a'; MAX_MESSAGE_BYTES + 1];
+        let err = decode_text_message(over).expect_err("one byte past the limit must not decode");
+        assert!(matches!(err, MessageDecodeError::TooLarge { .. }));
     }
 
     /// Decoding well-formed JSON that is missing a required field returns the
