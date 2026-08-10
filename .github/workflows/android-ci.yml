@@ -256,6 +256,22 @@ jobs:
         with:
           targets: aarch64-linux-android,x86_64-linux-android
 
+      # Real gap found live (#382 goal doc §8, 2026-08-10): this job rebuilds and diffs
+      # committed artifacts, but native-bridge/'s own real hermetic test suite --
+      # everything proving decode_text_message/recv_text never panic on hostile input,
+      # the real two-session Noise_IK handshake tests, the deadlock regression test --
+      # was never actually run by CI at all. Neither this job nor build-and-test's own
+      # "Unit tests" step (Gradle's testDebugUnitTest, the Kotlin/Robolectric side) ever
+      # invoked `cargo test` here; every one of these tests only ever ran because a human
+      # (or this loop) happened to run them by hand before pushing. A real regression in
+      # native-bridge's own logic could have merged with zero CI signal. Runs on the
+      # plain host target -- these are hermetic unit/integration tests, not the
+      # Android cross-compiled build the steps below verify -- so it needs no NDK setup
+      # and can fail fast before the slower artifact rebuild below spends any time.
+      - name: Run native-bridge's own hermetic test suite
+        working-directory: native-bridge
+        run: cargo test --locked
+
       - uses: nttld/setup-ndk@v1
         id: setup-ndk
         with:

@@ -412,6 +412,62 @@ mod tests {
     }
 
     #[tokio::test]
+    /// Requirement #22 criterion 2's own real claim, proven at the native-session level: a
+    /// malformed frame received over an established, authenticated channel must surface as a
+    /// real, typed `ChannelError::Decode` -- never a panic -- and criterion 3's claim that the
+    /// channel stays usable afterward. `send_text` always encodes a well-formed `TextMessage`
+    /// (there is no way to construct a malformed one through it), so this sends raw, deliberately
+    /// invalid bytes through the exact same real `a2a_send` framing+encryption `send_text` uses
+    /// internally -- the real hostile-peer scenario: an authenticated session sending bytes that
+    /// don't decode as a real message, not a fake/mocked failure.
+    async fn recv_text_returns_a_typed_decode_error_for_a_real_malformed_frame_and_stays_usable_afterward() {
+        let responder_identity = generate_channel_identity();
+        let initiator_identity = generate_channel_identity();
+
+        let listener = bind_channel_listener("127.0.0.1:0".to_string()).await.expect("bind");
+        let bound_addr = listener.local_addr().expect("local_addr");
+        let responder_public_hex = responder_identity.public_key_hex();
+
+        let accept_task = tokio::spawn({
+            let responder_identity = responder_identity.clone();
+            async move { listener.accept(responder_identity).await }
+        });
+        let initiator_session = dial_channel_direct(initiator_identity, responder_public_hex.clone(), bound_addr)
+            .await
+            .expect("initiator completes the handshake");
+        let responder_session = accept_task.await.expect("accept task").expect("responder completes the handshake");
+
+        // The real hostile/corrupted-peer case: bytes that are genuinely not a well-formed
+        // TextMessage, sent through the real, authenticated, encrypted transport -- not a
+        // mocked failure injected some other way.
+        {
+            let mut write = responder_session.write.lock().await;
+            let mut transport = responder_session.transport.lock().await;
+            a2a_send(&mut *write, &mut transport, b"not a real TextMessage at all")
+                .await
+                .expect("the real encrypted send of the hostile bytes itself must succeed");
+        }
+
+        let result = initiator_session.recv_text().await;
+        match result {
+            Err(ChannelError::Decode { .. }) => {}
+            other => panic!("a malformed frame must surface as a real, typed ChannelError::Decode, never a panic or a different error: {other:?}"),
+        }
+
+        // Criterion 3's own claim, proven at this level too (already fixed on the Kotlin
+        // caller's side -- this proves the native session itself was never the problem): a real,
+        // well-formed message from the SAME peer immediately after a malformed one still arrives
+        // normally, on the same session, no reconnect needed.
+        let followup = crate::message::new_text_message(responder_public_hex.clone(), "still here after the bad frame".to_string());
+        responder_session.send_text(followup.clone()).await.expect("send after the malformed frame");
+        let received = initiator_session
+            .recv_text()
+            .await
+            .expect("recv_text must still work on the same session after a prior malformed frame");
+        assert_eq!(received.body, followup.body, "the real, well-formed follow-up message must arrive intact");
+    }
+
+    #[tokio::test]
     /// Real gap found live 2026-08-07 (#382 goal doc §8, DAU lens): `TextMessage::sender_pubkey`
     /// used to be taken verbatim from the wire, entirely self-reported -- nothing checked it
     /// against anything the receiving side actually authenticated during the real Noise_IK
