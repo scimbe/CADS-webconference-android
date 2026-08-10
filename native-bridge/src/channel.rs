@@ -246,6 +246,27 @@ impl ChannelSession {
         Ok(())
     }
 
+    /// Test-only infrastructure for requirement #22 criterion 2's remaining on-device half
+    /// (`#382` goal doc, `development-system-goal.md`): `send_text` above always encodes a
+    /// well-formed [`TextMessage`] -- there is no way to construct a malformed frame through the
+    /// real production API, by design. This crate's own hermetic test
+    /// (`recv_text_returns_a_typed_decode_error_for_a_real_malformed_frame_and_stays_usable_afterward`)
+    /// already proves the native-session half of criterion 2 by reaching into this same session's
+    /// private fields directly, but a Kotlin instrumented test has no such access -- it can only
+    /// call what's exported over UniFFI. This is the same real, authenticated-hostile-peer
+    /// mechanism that test already uses (encrypts+frames `bytes` verbatim via the exact same
+    /// `a2a_send` `send_text` calls internally, skipping only `encode_text_message`), exposed as
+    /// a real UniFFI function so an on-device test can drive the identical scenario through two
+    /// real sessions on a real emulator, then inspect `logcat` for a Rust panic marker -- not a
+    /// mock, not a simulated failure. Deliberately named and documented as test infrastructure,
+    /// not a production capability: nothing in `MainActivity`'s own UI ever calls this.
+    async fn send_raw_bytes_for_testing(&self, bytes: Vec<u8>) -> Result<(), ChannelError> {
+        let mut write = self.write.lock().await;
+        let mut transport = self.transport.lock().await;
+        a2a_send(&mut *write, &mut transport, &bytes).await?;
+        Ok(())
+    }
+
     /// Receives and decrypts one [`TextMessage`] from the established Noise_IK transport
     /// session. Blocks (asynchronously) until a message arrives or the connection is lost.
     ///
@@ -459,6 +480,55 @@ mod tests {
         // well-formed message from the SAME peer immediately after a malformed one still arrives
         // normally, on the same session, no reconnect needed.
         let followup = crate::message::new_text_message(responder_public_hex.clone(), "still here after the bad frame".to_string());
+        responder_session.send_text(followup.clone()).await.expect("send after the malformed frame");
+        let received = initiator_session
+            .recv_text()
+            .await
+            .expect("recv_text must still work on the same session after a prior malformed frame");
+        assert_eq!(received.body, followup.body, "the real, well-formed follow-up message must arrive intact");
+    }
+
+    #[tokio::test]
+    /// Requirement #22 criterion 2's on-device half is blocked on a real gap: no UniFFI API
+    /// exists for Kotlin to send deliberately malformed bytes (`send_text` only ever encodes a
+    /// well-formed message). This proves the new `send_raw_bytes_for_testing` -- the exact
+    /// UniFFI-exported surface a Kotlin instrumented test will call -- reproduces the same real
+    /// scenario the private-field-access test above already proved, through the actual public API
+    /// surface, not internals. De-risks the follow-up instrumented test: if this passes, the
+    /// Kotlin side calling the identical function should behave identically.
+    async fn send_raw_bytes_for_testing_reproduces_the_real_malformed_frame_scenario_through_the_public_api() {
+        let responder_identity = generate_channel_identity();
+        let initiator_identity = generate_channel_identity();
+
+        let listener = bind_channel_listener("127.0.0.1:0".to_string()).await.expect("bind");
+        let bound_addr = listener.local_addr().expect("local_addr");
+        let responder_public_hex = responder_identity.public_key_hex();
+
+        let accept_task = tokio::spawn({
+            let responder_identity = responder_identity.clone();
+            async move { listener.accept(responder_identity).await }
+        });
+        let initiator_session = dial_channel_direct(initiator_identity, responder_public_hex.clone(), bound_addr)
+            .await
+            .expect("initiator completes the handshake");
+        let responder_session = accept_task.await.expect("accept task").expect("responder completes the handshake");
+
+        // The public API a Kotlin instrumented test will actually call -- no reaching into
+        // private fields here.
+        responder_session
+            .send_raw_bytes_for_testing(b"not a real TextMessage at all".to_vec())
+            .await
+            .expect("the real encrypted send of the hostile bytes itself must succeed");
+
+        let result = initiator_session.recv_text().await;
+        match result {
+            Err(ChannelError::Decode { .. }) => {}
+            other => panic!("a malformed frame sent via the public test API must surface as a real, typed ChannelError::Decode, never a panic: {other:?}"),
+        }
+
+        // Criterion 3 again, through the public surface: the session survives and a real
+        // follow-up message still arrives.
+        let followup = crate::message::new_text_message(responder_public_hex.clone(), "still here after the bad frame via the public API".to_string());
         responder_session.send_text(followup.clone()).await.expect("send after the malformed frame");
         let received = initiator_session
             .recv_text()
