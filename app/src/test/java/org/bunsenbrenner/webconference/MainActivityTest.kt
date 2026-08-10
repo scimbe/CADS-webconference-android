@@ -10,6 +10,7 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
+import uniffi.native_bridge.ChannelException
 
 /**
  * Proves the scaffold's status line still renders, and that the real connect/send/
@@ -230,5 +231,30 @@ class MainActivityTest {
         scenario.moveToState(Lifecycle.State.DESTROYED)
 
         assertFalse("onDestroy must have closed the real database handle, not left it open", db.isOpen)
+    }
+
+    /**
+     * Real bug found and fixed (requirement #22 criterion 3, #382): [MainActivity.receiveLoop]
+     * used to catch `ChannelException` around its whole `while(true)`, so a single malformed
+     * frame from a peer (`ChannelException.Decode`) ended the loop identically to a genuinely
+     * dead connection (`Io`, `Handshake`, ...) and reset the UI with a misleading "disconnected"
+     * status, even though the transport itself was still healthy. Drives the real, production
+     * [MainActivity.isFatalChannelError] decision function [receiveLoop] now calls -- not a
+     * reimplementation of its logic -- against every real `ChannelException` variant.
+     */
+    @Test
+    fun onlyAGenuineChannelFailureIsFatalNotASingleMalformedFrame() {
+        ActivityScenario.launch(MainActivity::class.java).use { scenario ->
+            scenario.onActivity { activity ->
+                assertFalse(
+                    "a single rejected frame must not tear down the whole channel",
+                    activity.isFatalChannelError(ChannelException.Decode("bad frame")),
+                )
+                assertTrue(activity.isFatalChannelError(ChannelException.Io("connection reset")))
+                assertTrue(activity.isFatalChannelError(ChannelException.Handshake("peer key mismatch")))
+                assertTrue(activity.isFatalChannelError(ChannelException.InvalidPeerKey("not hex")))
+                assertTrue(activity.isFatalChannelError(ChannelException.InvalidAddress("not host:port")))
+            }
+        }
     }
 }

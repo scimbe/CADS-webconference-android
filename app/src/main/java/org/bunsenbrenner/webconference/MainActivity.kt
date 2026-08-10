@@ -292,16 +292,35 @@ class MainActivity : AppCompatActivity() {
         connectButton.isEnabled = false
     }
 
-    /** Loops on real `recvText()` until the session errors (peer disconnects, I/O fails). */
+    /**
+     * Loops on real `recvText()` until the session itself errors (peer disconnects, I/O
+     * fails, the handshake state goes bad) -- but NOT on a single malformed frame.
+     *
+     * Real gap found and fixed (requirement #22 criterion 3, #382): this used to catch
+     * `ChannelException` around the whole `while(true)`, so a `Decode` error -- a hostile
+     * or simply corrupted single frame, exactly the input `native-bridge`'s own
+     * `decode_text_message` is required to reject as a typed error rather than panic on --
+     * broke the loop identically to a real dead connection and called
+     * [resetForNewConnection] with a misleading "disconnected" status, even though the TCP
+     * socket and Noise session were still perfectly healthy. One bad frame from a peer
+     * silently ended the whole conversation and demanded a full reconnect. Fixed: the catch
+     * now lives around one `recvText()` call, not the whole loop, and only a genuinely
+     * fatal error (anything [isFatalChannelError] says isn't a mere decode failure) ends
+     * it -- a rejected frame is dropped and the loop keeps listening for whatever
+     * well-formed message the same peer sends next, matching [ChannelSession.recvText]'s
+     * own doc comment on the native side.
+     */
     private suspend fun receiveLoop(activeSession: ChannelSession) {
-        try {
-            while (true) {
-                val msg = activeSession.recvText()
-                withContext(Dispatchers.IO) { messageStore.insert(msg, MessageDirection.RECEIVED) }
-                renderMessage(msg.body, MessageDirection.RECEIVED, null)
+        while (true) {
+            val msg = try {
+                activeSession.recvText()
+            } catch (e: ChannelException) {
+                if (!isFatalChannelError(e)) continue
+                resetForNewConnection(getString(R.string.disconnected, e.message))
+                return
             }
-        } catch (e: ChannelException) {
-            resetForNewConnection(getString(R.string.disconnected, e.message))
+            withContext(Dispatchers.IO) { messageStore.insert(msg, MessageDirection.RECEIVED) }
+            renderMessage(msg.body, MessageDirection.RECEIVED, null)
         }
     }
 
@@ -371,6 +390,15 @@ class MainActivity : AppCompatActivity() {
         startListeningButton.isEnabled = true
         connectButton.isEnabled = true
     }
+
+    /**
+     * Requirement #22 criterion 3's own real distinction: a [ChannelException.Decode] is one
+     * rejected frame, not a dead channel -- [receiveLoop] must drop it and keep listening.
+     * Every other [ChannelException] variant (`Io`, `Handshake`, ...) means the transport or
+     * the authenticated session itself is actually gone, so those are genuinely fatal.
+     */
+    @VisibleForTesting
+    internal fun isFatalChannelError(e: ChannelException): Boolean = e !is ChannelException.Decode
 
     /** Pure UI append -- persistence is a separate, explicit call at each real call site
      * ([onSendClicked], [receiveLoop], [loadPersistedHistory]), never implied by this.
