@@ -704,6 +704,8 @@ internal object IntegrityCheckingUniffiLib {
     ): Int
     external fun uniffi_native_bridge_checksum_method_channelsession_recv_text(
     ): Int
+    external fun uniffi_native_bridge_checksum_method_channelsession_send_raw_bytes_for_testing(
+    ): Int
     external fun uniffi_native_bridge_checksum_method_channelsession_send_text(
     ): Int
     external fun ffi_native_bridge_uniffi_contract_version(
@@ -743,6 +745,8 @@ internal object UniffiLib {
     external fun uniffi_native_bridge_fn_free_channelsession(`handle`: Long,uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
     external fun uniffi_native_bridge_fn_method_channelsession_recv_text(`ptr`: Long,
+    ): Long
+    external fun uniffi_native_bridge_fn_method_channelsession_send_raw_bytes_for_testing(`ptr`: Long,`bytes`: RustBuffer.ByValue,
     ): Long
     external fun uniffi_native_bridge_fn_method_channelsession_send_text(`ptr`: Long,`message`: RustBuffer.ByValue,
     ): Long
@@ -915,6 +919,9 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_native_bridge_checksum_method_channelsession_recv_text() != 20231) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_native_bridge_checksum_method_channelsession_send_raw_bytes_for_testing() != 57779) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_native_bridge_checksum_method_channelsession_send_text() != 39954) {
@@ -1949,6 +1956,24 @@ public interface ChannelSessionInterface {
     suspend fun `recvText`(): TextMessage
     
     /**
+     * Test-only infrastructure for requirement #22 criterion 2's remaining on-device half
+     * (`#382` goal doc, `development-system-goal.md`): `send_text` above always encodes a
+     * well-formed [`TextMessage`] -- there is no way to construct a malformed frame through the
+     * real production API, by design. This crate's own hermetic test
+     * (`recv_text_returns_a_typed_decode_error_for_a_real_malformed_frame_and_stays_usable_afterward`)
+     * already proves the native-session half of criterion 2 by reaching into this same session's
+     * private fields directly, but a Kotlin instrumented test has no such access -- it can only
+     * call what's exported over UniFFI. This is the same real, authenticated-hostile-peer
+     * mechanism that test already uses (encrypts+frames `bytes` verbatim via the exact same
+     * `a2a_send` `send_text` calls internally, skipping only `encode_text_message`), exposed as
+     * a real UniFFI function so an on-device test can drive the identical scenario through two
+     * real sessions on a real emulator, then inspect `logcat` for a Rust panic marker -- not a
+     * mock, not a simulated failure. Deliberately named and documented as test infrastructure,
+     * not a production capability: nothing in `MainActivity`'s own UI ever calls this.
+     */
+    suspend fun `sendRawBytesForTesting`(`bytes`: kotlin.ByteArray)
+    
+    /**
      * Encrypts `message` (via `encode_text_message`'s existing JSON wire form) and sends it
      * over the established Noise_IK transport session.
      *
@@ -2103,6 +2128,45 @@ open class ChannelSession: Disposable, AutoCloseable, ChannelSessionInterface
         { future -> UniffiLib.ffi_native_bridge_rust_future_free_rust_buffer(future) },
         // lift function
         { FfiConverterTypeTextMessage.lift(it) },
+        // Error FFI converter
+        ChannelException.ErrorHandler,
+    )
+    }
+
+    
+    /**
+     * Test-only infrastructure for requirement #22 criterion 2's remaining on-device half
+     * (`#382` goal doc, `development-system-goal.md`): `send_text` above always encodes a
+     * well-formed [`TextMessage`] -- there is no way to construct a malformed frame through the
+     * real production API, by design. This crate's own hermetic test
+     * (`recv_text_returns_a_typed_decode_error_for_a_real_malformed_frame_and_stays_usable_afterward`)
+     * already proves the native-session half of criterion 2 by reaching into this same session's
+     * private fields directly, but a Kotlin instrumented test has no such access -- it can only
+     * call what's exported over UniFFI. This is the same real, authenticated-hostile-peer
+     * mechanism that test already uses (encrypts+frames `bytes` verbatim via the exact same
+     * `a2a_send` `send_text` calls internally, skipping only `encode_text_message`), exposed as
+     * a real UniFFI function so an on-device test can drive the identical scenario through two
+     * real sessions on a real emulator, then inspect `logcat` for a Rust panic marker -- not a
+     * mock, not a simulated failure. Deliberately named and documented as test infrastructure,
+     * not a production capability: nothing in `MainActivity`'s own UI ever calls this.
+     */
+    @Throws(ChannelException::class)
+    @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
+    override suspend fun `sendRawBytesForTesting`(`bytes`: kotlin.ByteArray) {
+        return uniffiRustCallAsync(
+        callWithHandle { uniffiHandle ->
+            UniffiLib.uniffi_native_bridge_fn_method_channelsession_send_raw_bytes_for_testing(
+                uniffiHandle,
+                
+        FfiConverterByteArray.lower(`bytes`),
+            )
+        },
+        { future, callback, continuation -> UniffiLib.ffi_native_bridge_rust_future_poll_void(future, callback, continuation) },
+        { future, continuation -> UniffiLib.ffi_native_bridge_rust_future_complete_void(future, continuation) },
+        { future -> UniffiLib.ffi_native_bridge_rust_future_free_void(future) },
+        // lift function
+        { Unit },
+        
         // Error FFI converter
         ChannelException.ErrorHandler,
     )
