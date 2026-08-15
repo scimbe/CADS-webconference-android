@@ -29,7 +29,14 @@ Documented in the reference repo's README / open issues. Each one gets a real fi
    TODO in `rust-core/src/ice.rs` (stub).
 3. **Identity keys in cleartext** (web: `localStorage`) — Android fix: **Android Keystore** for the actual key
    material (hardware-backed where available), **EncryptedSharedPreferences** for anything that must be
-   file-backed. No cleartext key material on disk. See `android/app/src/main/kotlin/.../KeyStoreIdentity.kt` (TODO).
+   file-backed. No cleartext key material on disk. Implemented in
+   `android/app/src/main/kotlin/.../identity/KeyStoreIdentity.kt` + `KeyStoreIdentityTest.kt` (androidTest) --
+   **written but not yet compiled/run**: no Android SDK/Gradle/Kotlin toolchain available in this dev
+   environment (verified: only `javac` present). Needs a real instrumented-test run before this is trusted.
+   Still open: wiring `KeyStoreIdentity` into the actual call-setup UI flow (currently a standalone class,
+   nothing calls it yet), and the rust-core `.aar` build itself (`implementation(project(":rust-core"))` is
+   still a TODO in `app/build.gradle.kts` -- `generateHolderIdentity()`/`generateNoiseIdentity()` exist and
+   are tested in `rust-core/`, but aren't cross-compiled for Android yet).
 4. **Narrow bridge trust model** — server-side (`bridge/server.js` in the reference repo), out of scope for the
    Android client itself but tracked here since the client's assumptions about bridge trust need to match
    whatever the server-side fix ends up being.
