@@ -94,3 +94,16 @@ afterEvaluate {
     tasks.matching { it.name.startsWith("compile") && it.name.contains("Kotlin") }
         .configureEach { dependsOn("generateUniffiBindings") }
 }
+
+// Real bug, root-caused via mozilla/rust-android-gradle's own issue #85 (not guessed):
+// mergeDebugJniLibFolders was NOT depending on cargoBuild, only javaPreCompile was wired
+// by the plugin's default behavior -- on a build where the merge task runs before cargoBuild
+// finishes producing the .so files, it snapshots an empty/stale jniLibs source, and the
+// final .aar ends up with classes.jar but no native libraries (confirmed via `unzip -l` in
+// the previous debugging session -- matches the exact symptom of mozilla/rust-android-gradle#43,
+// "JNI libraries missing in AAR file"). Explicit dependency, the documented upstream fix:
+tasks.whenTaskAdded {
+    if (name == "mergeDebugJniLibFolders" || name == "mergeReleaseJniLibFolders") {
+        dependsOn("cargoBuild")
+    }
+}
