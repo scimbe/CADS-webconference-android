@@ -35,7 +35,10 @@ dependencies {
     implementation("androidx.appcompat:appcompat:1.7.0")
     implementation("androidx.security:security-crypto:1.1.0-alpha06") // EncryptedSharedPreferences, gap 3
     implementation("org.webrtc:google-webrtc:1.0.32006")
-    // TODO: implementation(project(":rust-core")) once the cargo-ndk .aar build is wired in
+    // Wired in rust-core/build.gradle.kts (cargo-ndk + UniFFI Kotlin bindgen) -- NOT
+    // VERIFIED, no Gradle/Android toolchain available to actually build this. See that
+    // file's own doc comment and README.md's "Not yet done".
+    implementation(project(":rust-core"))
 
     // Instrumented tests (KeyStoreIdentityTest) -- EncryptedSharedPreferences/Keystore need
     // a real Android runtime, not a JVM unit test, hence androidTest not test.

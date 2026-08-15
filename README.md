@@ -16,12 +16,13 @@ by 17 passing tests, run both locally and in the actual GitHub Actions CI (`dock
 compose run test`, not just `cargo test` on the host) — see [`.github/workflows/ci.yml`](.github/workflows/ci.yml).
 
 Not yet done:
-- The Android app itself doesn't call into `rust-core` yet — `implementation(project(":rust-core"))`
-  in `android/app/build.gradle.kts` is still a TODO; the `cargo-ndk` cross-compile step that
-  produces the `.aar` isn't wired in.
-- `KeyStoreIdentity.kt` (Android Keystore-backed key storage, gap 3) is written but **not
-  compiled or tested** — no Android/Gradle/Kotlin toolchain was available in the environment
-  it was written in (verified: only `javac` present, no SDK).
+- `android/app` now depends on `project(":rust-core")`, and `rust-core/build.gradle.kts` wires
+  `cargo-ndk` + UniFFI Kotlin bindgen (rust-android-gradle plugin) — but this is **written, not
+  verified**: no Gradle/Android/NDK toolchain was available to actually run a build. Needs a real
+  `./gradlew :rust-core:assembleDebug` before it's trusted; the plugin API may have moved on.
+- Nothing in the app UI calls the generated `uniffi.ct_agent_android.*` bindings yet, or
+  `KeyStoreIdentity.kt` (Android Keystore-backed key storage, gap 3, also unverified for the
+  same toolchain reason).
 - No call UI. `MainActivity` is a placeholder screen.
 - TURN (gap 2) has a tested config surface but no real TURN server/credentials behind it.
 - Gap 4 (narrow bridge trust model) is server-side, out of this repo's scope.
