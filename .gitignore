@@ -1,6 +1,10 @@
 # Rust
 /rust-core/target/
-Cargo.lock
+# Cargo.lock deliberately NOT ignored (fixed -- it was, wrongly): rust-core builds directly
+# into the Android app, an application deliverable, not a library published for other crates
+# to depend on. Committing the lockfile pins exact transitive versions (including ct-common's
+# git+tag dependency and every crypto crate under it) for reproducible builds across CI, other
+# machines, and time -- the usual reason libraries exclude it doesn't apply here.
 
 # Android / Gradle
 /android/.gradle/
