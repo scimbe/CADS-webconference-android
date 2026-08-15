@@ -95,15 +95,18 @@ afterEvaluate {
         .configureEach { dependsOn("generateUniffiBindings") }
 }
 
-// Real bug, root-caused via mozilla/rust-android-gradle's own issue #85 (not guessed):
-// mergeDebugJniLibFolders was NOT depending on cargoBuild, only javaPreCompile was wired
-// by the plugin's default behavior -- on a build where the merge task runs before cargoBuild
-// finishes producing the .so files, it snapshots an empty/stale jniLibs source, and the
-// final .aar ends up with classes.jar but no native libraries (confirmed via `unzip -l` in
-// the previous debugging session -- matches the exact symptom of mozilla/rust-android-gradle#43,
-// "JNI libraries missing in AAR file"). Explicit dependency, the documented upstream fix:
-tasks.whenTaskAdded {
-    if (name == "mergeDebugJniLibFolders" || name == "mergeReleaseJniLibFolders") {
-        dependsOn("cargoBuild")
+// rust-core-debug.aar was missing the native .so libraries (classes.jar only, verified via
+// unzip -l across multiple build attempts) -- matches mozilla/rust-android-gradle#43. First
+// attempted fix, per that plugin's own issue #85, was making mergeDebugJniLibFolders depend
+// on cargoBuild directly -- that corrected task *ordering* but a clean rebuild still hit a
+// separate "Duplicate resources" error on every ABI. Replaced with the fix a maintainer of a
+// DOWNSTREAM consumer actually confirmed working for the identical symptom (real GitHub
+// comment on #43, not guessed): depend on preDebugBuild/preReleaseBuild instead -- these run
+// early enough in the task graph that cargoBuild's output exists before the plugin's own
+// (apparently duplicate-prone) jniLibs sourceSet registration is evaluated, sidestepping the
+// duplicate-registration issue rather than fighting it head-on via the merge task itself.
+afterEvaluate {
+    for (taskName in arrayOf("preDebugBuild", "preReleaseBuild")) {
+        tasks.findByName(taskName)?.dependsOn("cargoBuild")
     }
 }
