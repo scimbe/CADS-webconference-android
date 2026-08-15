@@ -12,6 +12,9 @@
 
 use std::sync::Mutex;
 
+mod ice;
+pub use ice::{build_ice_server_list, default_stun_only_ice_servers, IceServerConfig};
+
 uniffi::setup_scaffolding!();
 
 #[derive(Debug, thiserror::Error, uniffi::Error)]

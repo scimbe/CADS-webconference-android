@@ -25,8 +25,11 @@ Documented in the reference repo's README / open issues. Each one gets a real fi
    abandoned ~2s later, ~14s of silence with no user feedback beforehand. Fix here: redesign the transport
    handoff as an explicit state machine (see `rust-core/` transport module, TODO) with a fresh signaling
    connection on fallback and visible UI feedback from t=0, not just after the automatic path fails.
-2. **No TURN relay** (STUN only) — needs a real TURN server + credential provisioning. Tracked as a config/infra
-   TODO in `rust-core/src/ice.rs` (stub).
+2. **No TURN relay** (STUN only) — needs a real TURN server + credential provisioning. `rust-core/src/ice.rs`
+   provides the (tested) configuration surface — `build_ice_server_list()` takes real TURN URLs/credentials
+   once provisioned and falls back to STUN-only otherwise. This crate has no more TURN infrastructure than the
+   reference repo did — the actual server/credentials still need to come from somewhere (a backend minting
+   short-lived TURN credentials, most likely) before this gap is really closed, not just made configurable.
 3. **Identity keys in cleartext** (web: `localStorage`) — Android fix: **Android Keystore** for the actual key
    material (hardware-backed where available), **EncryptedSharedPreferences** for anything that must be
    file-backed. No cleartext key material on disk. Implemented in
