@@ -7,6 +7,11 @@ See [ARCHITECTURE.md](./ARCHITECTURE.md) for the full design, the four known gap
 (broken WebRTC fallback, no TURN, cleartext keys, narrow bridge trust model), and the
 channel-to-channel feature.
 
+**License:** [PolyForm Noncommercial 1.0.0](./LICENSE), matching `ct-common`
+(`scimbe/CADS-Tunnel`), which `rust-core` depends on directly — a more permissive license
+(e.g. MIT) for this repo wouldn't accurately cover the `ct-common` code compiled into any
+resulting APK regardless of what license wrapped it.
+
 ## Status
 
 `rust-core` is functionally complete and CI-verified: identity generation, the full
