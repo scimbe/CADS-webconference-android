@@ -7,6 +7,11 @@ Cargo.lock
 /android/build/
 /android/app/build/
 /android/local.properties
+# rust-core/build/ specifically -- missed initially, caught the hard way: `git add -A`
+# staged the *entire* generated Gradle build output (compiled .class files, the .aar,
+# copied .so libs, Kotlin incremental-compile caches) because only android/build/ was
+# listed, not rust-core/build/ (a sibling Gradle module outside android/).
+/rust-core/build/
 *.iml
 .idea/
 

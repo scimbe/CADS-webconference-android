@@ -8,6 +8,15 @@ description = "Android bindings for ct-agent/ct-common (CADS-Tunnel Agent-Fabric
 crate-type = ["cdylib", "staticlib", "lib"]
 name = "ct_agent_android"
 
+# Real build error, live-caught: `cargo run --bin uniffi-bindgen` (used by
+# build.gradle.kts's generateUniffiBindings task) failed with "no bin target named
+# uniffi-bindgen" -- the uniffi crate's "cli" feature does NOT auto-provide this binary,
+# despite the doc comment on the `uniffi` dependency below implying it does. UniFFI's
+# actual documented pattern needs this explicit [[bin]] entry + uniffi-bindgen.rs.
+[[bin]]
+name = "uniffi-bindgen"
+path = "uniffi-bindgen.rs"
+
 [dependencies]
 # Same pin ct-agent's own workspace root uses for BOTH native/ and wasm/ (see
 # https://github.com/scimbe/ct-agent's Cargo.toml [workspace.dependencies]) --

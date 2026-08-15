@@ -9,8 +9,14 @@ ENV ANDROID_SDK_ROOT=/opt/android-sdk \
     PATH=/opt/cargo/bin:/opt/android-sdk/cmdline-tools/latest/bin:/opt/android-sdk/platform-tools:$PATH
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-      curl unzip git build-essential pkg-config \
+      curl unzip git build-essential pkg-config python3 \
+    && ln -s /usr/bin/python3 /usr/bin/python \
     && rm -rf /var/lib/apt/lists/*
+# python3 (+ the `python` symlink, real build error live-caught): the rust-android-gradle
+# plugin's linker-wrapper.sh shells out to `python` by name, not `python3` -- without this,
+# `gradle :rust-core:assembleDebug` fails with "linker-wrapper.sh: line 4: python: command
+# not found" on every non-host-arch target (only caught because assembleDebug builds all
+# four ABIs; the earlier raw `cargo ndk -t arm64-v8a build` never went through this wrapper).
 
 # Rust toolchain + Android targets + cargo-ndk.
 #
