@@ -1,0 +1,18 @@
+services:
+  build:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    volumes:
+      - ..:/workspace
+    working_dir: /workspace
+    command: ["cargo", "build", "--manifest-path", "rust-core/Cargo.toml"]
+
+  test:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    volumes:
+      - ..:/workspace
+    working_dir: /workspace
+    command: ["cargo", "test", "--manifest-path", "rust-core/Cargo.toml"]

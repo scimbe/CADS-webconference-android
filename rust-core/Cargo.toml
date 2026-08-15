@@ -1,0 +1,20 @@
+[package]
+name = "ct-agent-android"
+version = "0.1.0"
+edition = "2021"
+description = "Android bindings for ct-agent/ct-common (CADS-Tunnel Agent-Fabric client), via UniFFI"
+
+[lib]
+crate-type = ["cdylib", "staticlib", "lib"]
+name = "ct_agent_android"
+
+[dependencies]
+# TODO: path/git-pin to the same ct-agent / ct-common commit the WASM build
+# (scimbe/CADS-webconference-demo's build-wasm.sh / Agent.Dockerfile CT_AGENT_REF) uses.
+# ct-agent = { git = "https://github.com/scimbe/ct-agent", rev = "TODO: match CT_AGENT_REF" }
+uniffi = { version = "0.28", features = ["cli"] }
+
+[build-dependencies]
+uniffi = { version = "0.28", features = ["build"] }
+
+# Cross-compiled for Android via cargo-ndk; see ../docker/ for the reproducible build environment.
