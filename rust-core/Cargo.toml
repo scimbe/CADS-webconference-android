@@ -9,10 +9,16 @@ crate-type = ["cdylib", "staticlib", "lib"]
 name = "ct_agent_android"
 
 [dependencies]
-# TODO: path/git-pin to the same ct-agent / ct-common commit the WASM build
-# (scimbe/CADS-webconference-demo's build-wasm.sh / Agent.Dockerfile CT_AGENT_REF) uses.
-# ct-agent = { git = "https://github.com/scimbe/ct-agent", rev = "TODO: match CT_AGENT_REF" }
+# Same pin ct-agent's own workspace root uses for BOTH native/ and wasm/ (see
+# https://github.com/scimbe/ct-agent's Cargo.toml [workspace.dependencies]) --
+# verified directly from that repo, not guessed. Bump only in lockstep with
+# upstream's own tag bump.
+ct-common = { git = "https://github.com/scimbe/CADS-Tunnel", tag = "v0.4.13" }
 uniffi = { version = "0.28", features = ["cli"] }
+ed25519-dalek = { version = "2", features = ["rand_core"] }
+rand = "0.8"
+snow = "0.9"
+thiserror = "1"
 
 [build-dependencies]
 uniffi = { version = "0.28", features = ["build"] }

@@ -1,19 +1,291 @@
 //! UniFFI-exposed interface for the Android (and later iOS) port of ct-agent/ct-common.
-//! Mirrors the surface `ct-agent-wasm` exposes to CADS-webconference-demo's app.js, but
-//! over UniFFI instead of wasm-bindgen. No logic lives here yet — this is the scaffold
-//! that the real channel-join / Noise_IK / transport code will be ported into.
+//!
+//! Faithful port of `ct-agent`'s `wasm/src/lib.rs` (https://github.com/scimbe/ct-agent),
+//! swapping `wasm-bindgen` for `uniffi` as the FFI boundary. Every function here is a thin
+//! wrapper around `ct_common` -- the real protocol/crypto logic lives there, verified once,
+//! same as the wasm build. Ported by reading the actual upstream source, not guessed.
+//!
+//! Ported so far: identity generation, channel id derivation, wire framing, and the full
+//! Noise_IK handshake + transport state machine. NOT yet ported (see TODOs at the bottom):
+//! holder_sign, build_channel_join_request, and the WebRTC signal encode/decode wire format
+//! -- those need the same careful source-verified treatment before being added.
+
+use std::sync::Mutex;
 
 uniffi::setup_scaffolding!();
 
-/// Placeholder: mirrors `holderSign`/`buildChannelJoinRequest` from the web demo.
-/// TODO: port from ct-agent/ct-common once the crate is pinned in Cargo.toml.
-#[uniffi::export]
-pub fn channel_join_placeholder() -> String {
-    "not yet implemented — see ARCHITECTURE.md".to_string()
+#[derive(Debug, thiserror::Error, uniffi::Error)]
+pub enum CtAgentError {
+    #[error("{0}")]
+    Generic(String),
 }
 
-// TODO modules, ported from the reference repo's call-*.js + ct-agent core:
-// mod identity;   // Noise_IK keys — Android Keystore/EncryptedSharedPreferences backed, see ARCHITECTURE.md gap 3
-// mod transport;  // WebRTC + direct-channel transport and the fallback handoff state machine, gap 1
-// mod ice;        // STUN + TURN config, gap 2
-// mod channel;    // Agent-Fabric channel-join / channel-to-channel communication
+fn to_hex(bytes: &[u8]) -> String {
+    bytes.iter().map(|b| format!("{b:02x}")).collect()
+}
+
+fn from_hex(s: &str) -> Result<Vec<u8>, CtAgentError> {
+    if s.len() % 2 != 0 {
+        return Err(CtAgentError::Generic("hex string must have an even length".to_string()));
+    }
+    (0..s.len())
+        .step_by(2)
+        .map(|i| {
+            u8::from_str_radix(&s[i..i + 2], 16)
+                .map_err(|_| CtAgentError::Generic("invalid hex character".to_string()))
+        })
+        .collect()
+}
+
+fn hex32(s: &str) -> Result<[u8; 32], CtAgentError> {
+    let v = from_hex(s)?;
+    <[u8; 32]>::try_from(v.as_slice())
+        .map_err(|_| CtAgentError::Generic("expected 32 bytes (64 hex chars)".to_string()))
+}
+
+/// A freshly generated holder identity (ed25519) -- the channel member's own, stable
+/// identity. Mirrors `ct-agent-wasm`'s `HolderIdentity`/`generate_holder_identity`.
+/// SECURITY (ARCHITECTURE.md gap 3): the caller (Kotlin side) MUST persist `private_hex`
+/// via Android Keystore / EncryptedSharedPreferences immediately -- never write it to
+/// plain SharedPreferences, a plain file, or a log line.
+#[derive(uniffi::Record)]
+pub struct HolderIdentity {
+    pub public_hex: String,
+    pub private_hex: String,
+}
+
+#[uniffi::export]
+pub fn generate_holder_identity() -> HolderIdentity {
+    use ed25519_dalek::SigningKey;
+    let sk = SigningKey::generate(&mut rand::rngs::OsRng);
+    HolderIdentity {
+        public_hex: to_hex(sk.verifying_key().as_bytes()),
+        private_hex: to_hex(&sk.to_bytes()),
+    }
+}
+
+/// A freshly generated Noise (X25519) static keypair -- the channel member's transport
+/// key, distinct from its holder identity. Same Keystore requirement as `HolderIdentity`.
+#[derive(uniffi::Record)]
+pub struct NoiseIdentity {
+    pub public_hex: String,
+    pub private_hex: String,
+}
+
+#[uniffi::export]
+pub fn generate_noise_identity() -> NoiseIdentity {
+    let kp = ct_common::noise::generate_static_keypair();
+    NoiseIdentity {
+        public_hex: to_hex(&kp.public),
+        private_hex: to_hex(&kp.private),
+    }
+}
+
+/// Deterministic channel id for the link between two holder keys under a channel
+/// operator -- bit-for-bit the same computation a native or browser peer performs, so
+/// no coordination round-trip is needed to agree on it.
+#[uniffi::export]
+pub fn channel_id_for_link(
+    operator_pubkey_hex: String,
+    holder_a_hex: String,
+    holder_b_hex: String,
+) -> Result<String, CtAgentError> {
+    let operator = hex32(&operator_pubkey_hex)?;
+    let a = hex32(&holder_a_hex)?;
+    let b = hex32(&holder_b_hex)?;
+    let id = ct_common::channel::channel_id_for_link(&operator, &a, &b);
+    Ok(to_hex(&id.0))
+}
+
+/// Frame a Noise wire message for a byte-stream transport (2-byte big-endian length
+/// prefix + body) -- the exact framing native and browser peers use, so this client is
+/// wire-indistinguishable from either.
+#[uniffi::export]
+pub fn frame_message(msg: Vec<u8>) -> Vec<u8> {
+    ct_common::noise::frame(&msg)
+}
+
+const NOISE_MAX_MESSAGE: usize = 65535;
+
+/// A Noise_IK handshake in progress. Wrapped in a `Mutex` (not exposed to callers) purely
+/// because UniFFI objects are shared as `Arc<Self>` across the FFI boundary and need
+/// interior mutability for `write_message`/`read_message`/`into_transport` to mutate
+/// state through a shared reference -- the handshake itself is still only ever driven by
+/// one caller at a time, same single-threaded state machine as the wasm version.
+#[derive(uniffi::Object)]
+pub struct NoiseHandshake {
+    inner: Mutex<Option<snow::HandshakeState>>,
+}
+
+#[uniffi::export]
+impl NoiseHandshake {
+    /// Initiator side (mirrors `CT_CHANNEL_ROLE=initiate`): pins the peer's Noise public
+    /// key up front, per Noise_IK's initiator property.
+    #[uniffi::constructor]
+    pub fn new_initiator(
+        local_noise_private_hex: String,
+        remote_noise_public_hex: String,
+    ) -> Result<Self, CtAgentError> {
+        let local = hex32(&local_noise_private_hex)?;
+        let remote = hex32(&remote_noise_public_hex)?;
+        let hs = ct_common::noise::client_handshake(&local, &remote)
+            .map_err(|e| CtAgentError::Generic(e.to_string()))?;
+        Ok(Self { inner: Mutex::new(Some(hs)) })
+    }
+
+    /// Responder side (mirrors `CT_CHANNEL_ROLE=accept`): learns the peer's identity FROM
+    /// the first handshake message, needs only its own private key up front.
+    #[uniffi::constructor]
+    pub fn new_responder(local_noise_private_hex: String) -> Result<Self, CtAgentError> {
+        let local = hex32(&local_noise_private_hex)?;
+        let hs = ct_common::noise::origin_handshake(&local)
+            .map_err(|e| CtAgentError::Generic(e.to_string()))?;
+        Ok(Self { inner: Mutex::new(Some(hs)) })
+    }
+
+    pub fn write_message(&self, payload: Vec<u8>) -> Result<Vec<u8>, CtAgentError> {
+        let mut guard = self.inner.lock().unwrap();
+        let hs = guard
+            .as_mut()
+            .ok_or_else(|| CtAgentError::Generic("handshake already consumed by into_transport()".into()))?;
+        let mut buf = [0u8; NOISE_MAX_MESSAGE];
+        let n = hs
+            .write_message(&payload, &mut buf)
+            .map_err(|e| CtAgentError::Generic(e.to_string()))?;
+        Ok(buf[..n].to_vec())
+    }
+
+    pub fn read_message(&self, msg: Vec<u8>) -> Result<Vec<u8>, CtAgentError> {
+        let mut guard = self.inner.lock().unwrap();
+        let hs = guard
+            .as_mut()
+            .ok_or_else(|| CtAgentError::Generic("handshake already consumed by into_transport()".into()))?;
+        let mut buf = [0u8; NOISE_MAX_MESSAGE];
+        let n = hs
+            .read_message(&msg, &mut buf)
+            .map_err(|e| CtAgentError::Generic(e.to_string()))?;
+        Ok(buf[..n].to_vec())
+    }
+
+    pub fn is_finished(&self) -> Result<bool, CtAgentError> {
+        let guard = self.inner.lock().unwrap();
+        let hs = guard
+            .as_ref()
+            .ok_or_else(|| CtAgentError::Generic("handshake already consumed by into_transport()".into()))?;
+        Ok(hs.is_handshake_finished())
+    }
+
+    /// Transition to the encrypted transport session once `is_finished()` is true --
+    /// consumes this handshake's internal state (one-way, matching `snow`'s own model).
+    pub fn into_transport(&self) -> Result<NoiseTransport, CtAgentError> {
+        let mut guard = self.inner.lock().unwrap();
+        let hs = guard
+            .take()
+            .ok_or_else(|| CtAgentError::Generic("handshake already consumed by into_transport()".into()))?;
+        let t = hs
+            .into_transport_mode()
+            .map_err(|e| CtAgentError::Generic(e.to_string()))?;
+        Ok(NoiseTransport { inner: Mutex::new(t) })
+    }
+}
+
+/// An established, encrypted Noise_IK session -- carries the application-data traffic
+/// (SDP offers/answers, ICE candidates, and eventually media signaling).
+#[derive(uniffi::Object)]
+pub struct NoiseTransport {
+    inner: Mutex<snow::TransportState>,
+}
+
+#[uniffi::export]
+impl NoiseTransport {
+    pub fn encrypt(&self, plaintext: Vec<u8>) -> Result<Vec<u8>, CtAgentError> {
+        let mut guard = self.inner.lock().unwrap();
+        let mut buf = [0u8; NOISE_MAX_MESSAGE];
+        let n = guard
+            .write_message(&plaintext, &mut buf)
+            .map_err(|e| CtAgentError::Generic(e.to_string()))?;
+        Ok(buf[..n].to_vec())
+    }
+
+    pub fn decrypt(&self, ciphertext: Vec<u8>) -> Result<Vec<u8>, CtAgentError> {
+        let mut guard = self.inner.lock().unwrap();
+        let mut buf = [0u8; NOISE_MAX_MESSAGE];
+        let n = guard
+            .read_message(&ciphertext, &mut buf)
+            .map_err(|e| CtAgentError::Generic(e.to_string()))?;
+        Ok(buf[..n].to_vec())
+    }
+}
+
+// TODO, next iteration -- ported the same way as the above (read the real upstream
+// source first, then port), not yet done:
+// - holder_sign(holder_private_hex, message) -> Vec<u8>
+// - build_channel_join_request(grant_hex, endpoint) -> Vec<u8>
+// - encode_signal_offer/answer/ice_candidate/bye + decode_signal_message
+//   (the WebRTC signaling wire format -- needed for the channel-to-channel feature)
+// - ICE/TURN config (gap 2, ARCHITECTURE.md) -- not part of ct-agent-wasm's surface at
+//   all, this is new for the native client, needs its own design.
+// - transport fallback state machine (gap 1, ARCHITECTURE.md) -- also new, the reference
+//   repo's bug lives in call-transport-shared.js, not in this Rust core.
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn holder_and_noise_identities_round_trip_through_hex() {
+        let holder = generate_holder_identity();
+        assert_eq!(from_hex(&holder.public_hex).unwrap().len(), 32);
+        assert_eq!(from_hex(&holder.private_hex).unwrap().len(), 32);
+
+        let noise = generate_noise_identity();
+        assert_eq!(from_hex(&noise.public_hex).unwrap().len(), 32);
+        assert_eq!(from_hex(&noise.private_hex).unwrap().len(), 32);
+    }
+
+    #[test]
+    fn channel_id_for_link_is_order_independent() {
+        let op = to_hex(&[1u8; 32]);
+        let a = to_hex(&[2u8; 32]);
+        let b = to_hex(&[3u8; 32]);
+        let id_ab = channel_id_for_link(op.clone(), a.clone(), b.clone()).unwrap();
+        let id_ba = channel_id_for_link(op, b, a).unwrap();
+        assert_eq!(id_ab, id_ba, "channel id must not depend on holder argument order");
+    }
+
+    /// Real end-to-end Noise_IK handshake + encrypted transport round trip between an
+    /// initiator and a responder -- the actual authenticated key exchange two Android
+    /// peers (or an Android peer and a native/browser peer) perform to establish a
+    /// channel-to-channel session. Not a mock: real `snow`/`ct_common` state machines on
+    /// both sides, real ciphertext exchanged, real decrypt-and-compare at the end.
+    #[test]
+    fn noise_ik_handshake_and_transport_round_trip() {
+        let initiator_noise = generate_noise_identity();
+        let responder_noise = generate_noise_identity();
+
+        let initiator = NoiseHandshake::new_initiator(
+            initiator_noise.private_hex.clone(),
+            responder_noise.public_hex.clone(),
+        )
+        .unwrap();
+        let responder = NoiseHandshake::new_responder(responder_noise.private_hex.clone()).unwrap();
+
+        // Noise_IK: one message from initiator, one from responder, then both finished.
+        let msg1 = initiator.write_message(vec![]).unwrap();
+        responder.read_message(msg1).unwrap();
+        let msg2 = responder.write_message(vec![]).unwrap();
+        initiator.read_message(msg2).unwrap();
+
+        assert!(initiator.is_finished().unwrap());
+        assert!(responder.is_finished().unwrap());
+
+        let initiator_transport = initiator.into_transport().unwrap();
+        let responder_transport = responder.into_transport().unwrap();
+
+        let plaintext = b"channel-to-channel: hello from an Android peer".to_vec();
+        let ciphertext = initiator_transport.encrypt(plaintext.clone()).unwrap();
+        assert_ne!(ciphertext, plaintext, "must actually be encrypted, not passed through");
+        let decrypted = responder_transport.decrypt(ciphertext).unwrap();
+        assert_eq!(decrypted, plaintext);
+    }
+}
