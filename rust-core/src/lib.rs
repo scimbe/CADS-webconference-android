@@ -249,14 +249,147 @@ pub fn build_channel_join_request(grant_hex: String, endpoint: String) -> Result
     Ok(req.encode())
 }
 
-// TODO, next iteration -- ported the same way as the above (read the real upstream
-// source first, then port), not yet done:
-// - encode_signal_offer/answer/ice_candidate/bye + decode_signal_message
-//   (the WebRTC signaling wire format -- needed for the channel-to-channel feature)
+/// WebRTC signaling messages -- what rides over a [`NoiseTransport`] session (encrypt the
+/// encoded bytes, send over the channel; decrypt the peer's bytes, decode back into one of
+/// these). A thin, self-delimiting wire format carrying SDP/candidate text verbatim (this
+/// crate never parses SDP -- Android's own WebRTC stack generates/consumes it). Unlike the
+/// wasm build (which decodes into a loosely-typed JS object), UniFFI gives Kotlin a real
+/// sealed class here -- an improvement on the wire-compatible port, not a departure from it
+/// (the *encoding* is bit-for-bit identical, only the decoded Rust/Kotlin-side shape differs).
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Enum)]
+pub enum SignalMessage {
+    Offer { sdp: String },
+    Answer { sdp: String },
+    /// `sdp_mline_index` absent (`None`) is encoded on the wire as `u16::MAX` -- WebRTC's
+    /// own `RTCIceCandidateInit.sdpMLineIndex` is optional and a real index never reaches
+    /// anywhere close to that value.
+    IceCandidate { candidate: String, sdp_mid: Option<String>, sdp_mline_index: Option<u16> },
+    /// Explicit "hanging up" -- lets the peer tear down its `RTCPeerConnection` promptly
+    /// instead of waiting on an ICE-failure timeout when the channel just closes.
+    Bye,
+}
+
+const SIGNAL_TYPE_OFFER: u8 = 1;
+const SIGNAL_TYPE_ANSWER: u8 = 2;
+const SIGNAL_TYPE_ICE: u8 = 3;
+const SIGNAL_TYPE_BYE: u8 = 4;
+const SIGNAL_NO_MLINE_INDEX: u16 = u16::MAX;
+
+fn push_u16_str(out: &mut Vec<u8>, s: &str) {
+    out.extend_from_slice(&(s.len() as u16).to_be_bytes());
+    out.extend_from_slice(s.as_bytes());
+}
+fn push_u8_str(out: &mut Vec<u8>, s: &str) {
+    out.push(s.len() as u8);
+    out.extend_from_slice(s.as_bytes());
+}
+fn take_n<'a>(cur: &mut &'a [u8], n: usize) -> Result<&'a [u8], CtAgentError> {
+    if cur.len() < n {
+        return Err(CtAgentError::Generic("truncated signal message".to_string()));
+    }
+    let (head, tail) = cur.split_at(n);
+    *cur = tail;
+    Ok(head)
+}
+fn take_u8(cur: &mut &[u8]) -> Result<u8, CtAgentError> {
+    Ok(take_n(cur, 1)?[0])
+}
+fn take_u16_str(cur: &mut &[u8]) -> Result<String, CtAgentError> {
+    let len = u16::from_be_bytes(take_n(cur, 2)?.try_into().unwrap()) as usize;
+    String::from_utf8(take_n(cur, len)?.to_vec())
+        .map_err(|_| CtAgentError::Generic("signal message field is not valid UTF-8".to_string()))
+}
+fn take_u8_str(cur: &mut &[u8]) -> Result<String, CtAgentError> {
+    let len = take_u8(cur)? as usize;
+    String::from_utf8(take_n(cur, len)?.to_vec())
+        .map_err(|_| CtAgentError::Generic("signal message field is not valid UTF-8".to_string()))
+}
+
+impl SignalMessage {
+    fn encode_inner(&self) -> Vec<u8> {
+        let mut out = Vec::new();
+        match self {
+            SignalMessage::Offer { sdp } => {
+                out.push(SIGNAL_TYPE_OFFER);
+                push_u16_str(&mut out, sdp);
+            }
+            SignalMessage::Answer { sdp } => {
+                out.push(SIGNAL_TYPE_ANSWER);
+                push_u16_str(&mut out, sdp);
+            }
+            SignalMessage::IceCandidate { candidate, sdp_mid, sdp_mline_index } => {
+                out.push(SIGNAL_TYPE_ICE);
+                push_u16_str(&mut out, candidate);
+                push_u8_str(&mut out, sdp_mid.as_deref().unwrap_or(""));
+                out.extend_from_slice(&sdp_mline_index.unwrap_or(SIGNAL_NO_MLINE_INDEX).to_be_bytes());
+            }
+            SignalMessage::Bye => out.push(SIGNAL_TYPE_BYE),
+        }
+        out
+    }
+
+    fn decode_inner(bytes: &[u8]) -> Result<Self, CtAgentError> {
+        let mut cur = bytes;
+        let kind = take_u8(&mut cur)?;
+        match kind {
+            SIGNAL_TYPE_OFFER => Ok(SignalMessage::Offer { sdp: take_u16_str(&mut cur)? }),
+            SIGNAL_TYPE_ANSWER => Ok(SignalMessage::Answer { sdp: take_u16_str(&mut cur)? }),
+            SIGNAL_TYPE_ICE => {
+                let candidate = take_u16_str(&mut cur)?;
+                let mid = take_u8_str(&mut cur)?;
+                let mline = u16::from_be_bytes(take_n(&mut cur, 2)?.try_into().unwrap());
+                Ok(SignalMessage::IceCandidate {
+                    candidate,
+                    sdp_mid: (!mid.is_empty()).then_some(mid),
+                    sdp_mline_index: (mline != SIGNAL_NO_MLINE_INDEX).then_some(mline),
+                })
+            }
+            SIGNAL_TYPE_BYE => Ok(SignalMessage::Bye),
+            other => Err(CtAgentError::Generic(format!("unknown signal message type {other}"))),
+        }
+    }
+}
+
+#[uniffi::export]
+pub fn encode_signal_offer(sdp: String) -> Vec<u8> {
+    SignalMessage::Offer { sdp }.encode_inner()
+}
+
+#[uniffi::export]
+pub fn encode_signal_answer(sdp: String) -> Vec<u8> {
+    SignalMessage::Answer { sdp }.encode_inner()
+}
+
+/// `sdp_mid`/`sdp_mline_index` mirror `RTCIceCandidateInit`'s own optional fields --
+/// `None` for "absent", matching a candidate gathered before the remote description is set.
+#[uniffi::export]
+pub fn encode_signal_ice_candidate(
+    candidate: String,
+    sdp_mid: Option<String>,
+    sdp_mline_index: Option<u16>,
+) -> Vec<u8> {
+    SignalMessage::IceCandidate { candidate, sdp_mid, sdp_mline_index }.encode_inner()
+}
+
+#[uniffi::export]
+pub fn encode_signal_bye() -> Vec<u8> {
+    SignalMessage::Bye.encode_inner()
+}
+
+/// Decode a signal message received from the peer (after [`NoiseTransport::decrypt`]).
+#[uniffi::export]
+pub fn decode_signal_message(bytes: Vec<u8>) -> Result<SignalMessage, CtAgentError> {
+    SignalMessage::decode_inner(&bytes)
+}
+
+// TODO, next iteration:
 // - ICE/TURN config (gap 2, ARCHITECTURE.md) -- not part of ct-agent-wasm's surface at
 //   all, this is new for the native client, needs its own design.
 // - transport fallback state machine (gap 1, ARCHITECTURE.md) -- also new, the reference
 //   repo's bug lives in call-transport-shared.js, not in this Rust core.
+// - Android Keystore wiring on the Kotlin side (gap 3) -- this crate returns private key
+//   hex from generate_holder_identity/generate_noise_identity; the android/ module needs
+//   to immediately wrap that in EncryptedSharedPreferences, never store it as returned.
 
 #[cfg(test)]
 mod tests {
@@ -303,6 +436,49 @@ mod tests {
         // since this is the first thing called on a hostile/garbled join sequence.
         let result = build_channel_join_request("not-valid-hex!!".to_string(), "relay-only".to_string());
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn signal_message_offer_answer_bye_round_trip() {
+        for msg in [
+            SignalMessage::Offer { sdp: "v=0\r\no=- 1 2 IN IP4 127.0.0.1\r\n".to_string() },
+            SignalMessage::Answer { sdp: "v=0\r\no=- 3 4 IN IP4 127.0.0.1\r\n".to_string() },
+            SignalMessage::Bye,
+        ] {
+            let encoded = msg.encode_inner();
+            let decoded = SignalMessage::decode_inner(&encoded).unwrap();
+            assert_eq!(decoded, msg);
+        }
+    }
+
+    #[test]
+    fn signal_message_ice_candidate_round_trips_with_and_without_optional_fields() {
+        let full = SignalMessage::IceCandidate {
+            candidate: "candidate:1 1 UDP 2130706431 192.0.2.1 54321 typ host".to_string(),
+            sdp_mid: Some("audio".to_string()),
+            sdp_mline_index: Some(0),
+        };
+        assert_eq!(SignalMessage::decode_inner(&full.encode_inner()).unwrap(), full);
+
+        // Both optional fields absent (a candidate gathered before the remote description
+        // sets mid/mline-index) -- proves None isn't confused with Some(0)/Some("") on the wire.
+        let bare = SignalMessage::IceCandidate {
+            candidate: "candidate:2 1 UDP 2130706431 192.0.2.2 54322 typ host".to_string(),
+            sdp_mid: None,
+            sdp_mline_index: None,
+        };
+        assert_eq!(SignalMessage::decode_inner(&bare.encode_inner()).unwrap(), bare);
+    }
+
+    #[test]
+    fn encode_signal_helpers_match_direct_enum_construction() {
+        assert_eq!(
+            encode_signal_offer("sdp-a".to_string()),
+            SignalMessage::Offer { sdp: "sdp-a".to_string() }.encode_inner()
+        );
+        assert_eq!(encode_signal_bye(), SignalMessage::Bye.encode_inner());
+        let decoded = decode_signal_message(encode_signal_answer("sdp-b".to_string())).unwrap();
+        assert_eq!(decoded, SignalMessage::Answer { sdp: "sdp-b".to_string() });
     }
 
     #[test]
