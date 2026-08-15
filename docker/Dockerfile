@@ -12,11 +12,18 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       curl unzip git build-essential pkg-config \
     && rm -rf /var/lib/apt/lists/*
 
-# Rust toolchain + Android targets + cargo-ndk
+# Rust toolchain + Android targets + cargo-ndk.
+#
+# Real build error, live-caught (not guessed): `cargo install uniffi_bindgen` fails with
+# "there is nothing to install in `uniffi_bindgen v0.32.0`, because it has no binaries" --
+# that crate has no standalone CLI binary. The actual bindgen binary comes from `uniffi`
+# itself when built with `features = ["cli"]` (already set in rust-core/Cargo.toml) and is
+# invoked as `cargo run --bin uniffi-bindgen -- generate ...` *from inside* rust-core, not
+# via a separate global install. Only cargo-ndk needs a global `cargo install` here.
 RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable \
     && /opt/cargo/bin/rustup target add \
        aarch64-linux-android armv7-linux-androideabi x86_64-linux-android i686-linux-android \
-    && /opt/cargo/bin/cargo install cargo-ndk uniffi_bindgen
+    && /opt/cargo/bin/cargo install cargo-ndk
 
 # Android commandline-tools (NDK pinned via android/local.properties once that exists)
 # TODO: pin exact SDK/NDK versions once android/ has a real build.gradle.kts
