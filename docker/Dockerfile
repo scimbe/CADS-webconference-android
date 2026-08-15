@@ -25,7 +25,27 @@ RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --de
        aarch64-linux-android armv7-linux-androideabi x86_64-linux-android i686-linux-android \
     && /opt/cargo/bin/cargo install cargo-ndk
 
-# Android commandline-tools (NDK pinned via android/local.properties once that exists)
-# TODO: pin exact SDK/NDK versions once android/ has a real build.gradle.kts
+# Android cmdline-tools + Gradle -- added specifically to actually verify
+# rust-core/build.gradle.kts + android/settings.gradle.kts/app/build.gradle.kts (previously
+# written but never run, no toolchain having been available). Pinned versions, not "latest",
+# so this stays reproducible.
+ENV GRADLE_VERSION=8.7
+RUN curl -fsSL "https://services.gradle.org/distributions/gradle-${GRADLE_VERSION}-bin.zip" -o /tmp/gradle.zip \
+    && unzip -q /tmp/gradle.zip -d /opt \
+    && ln -s "/opt/gradle-${GRADLE_VERSION}/bin/gradle" /usr/local/bin/gradle \
+    && rm /tmp/gradle.zip
+
+RUN mkdir -p "$ANDROID_SDK_ROOT/cmdline-tools" \
+    && curl -fsSL "https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip" -o /tmp/cmdline-tools.zip \
+    && unzip -q /tmp/cmdline-tools.zip -d "$ANDROID_SDK_ROOT/cmdline-tools" \
+    && mv "$ANDROID_SDK_ROOT/cmdline-tools/cmdline-tools" "$ANDROID_SDK_ROOT/cmdline-tools/latest" \
+    && rm /tmp/cmdline-tools.zip \
+    && yes | sdkmanager --licenses > /dev/null \
+    && sdkmanager "platform-tools" "platforms;android-34" "build-tools;34.0.0"
+# NDK deliberately NOT installed here yet (large download, bounded-time build) -- means
+# `gradle tasks`/sync in this image gets exactly as far as rust-android-gradle's own NDK
+# presence check and stops there (verified: "NDK is not installed", not a plugin/config
+# error). Real end-to-end verification (an actual `:rust-core:assembleDebug`) needs
+# `sdkmanager "ndk;<version>"` added here first.
 
 WORKDIR /workspace

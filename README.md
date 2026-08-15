@@ -16,10 +16,14 @@ by 17 passing tests, run both locally and in the actual GitHub Actions CI (`dock
 compose run test`, not just `cargo test` on the host) — see [`.github/workflows/ci.yml`](.github/workflows/ci.yml).
 
 Not yet done:
-- `android/app` now depends on `project(":rust-core")`, and `rust-core/build.gradle.kts` wires
-  `cargo-ndk` + UniFFI Kotlin bindgen (rust-android-gradle plugin) — but this is **written, not
-  verified**: no Gradle/Android/NDK toolchain was available to actually run a build. Needs a real
-  `./gradlew :rust-core:assembleDebug` before it's trusted; the plugin API may have moved on.
+- `android/app` depends on `project(":rust-core")`, and `rust-core/build.gradle.kts` wires
+  `cargo-ndk` + UniFFI Kotlin bindgen (rust-android-gradle plugin). **Partially verified**: built a
+  real Gradle+Android-SDK Docker image and ran `gradle tasks` against this project — plugin ids/
+  versions resolve and all Gradle DSL is syntactically valid (no config errors), confirmed by
+  reaching rust-android-gradle's own NDK-presence check before failing with a clean
+  `NDK is not installed` (the NDK component was deliberately left uninstalled, large/slow download).
+  Still unverified: an actual `:rust-core:assembleDebug` (real cargo-ndk cross-compile + UniFFI
+  codegen + Kotlin compile), which needs the NDK added to the image first.
 - Nothing in the app UI calls the generated `uniffi.ct_agent_android.*` bindings yet, or
   `KeyStoreIdentity.kt` (Android Keystore-backed key storage, gap 3, also unverified for the
   same toolchain reason).
