@@ -14,6 +14,8 @@ use std::sync::Mutex;
 
 mod ice;
 pub use ice::{build_ice_server_list, default_stun_only_ice_servers, IceServerConfig};
+mod transport_fallback;
+pub use transport_fallback::{IceConnectionState, TransportFallbackController, TransportState};
 
 uniffi::setup_scaffolding!();
 

@@ -22,9 +22,12 @@ Documented in the reference repo's README / open issues. Each one gets a real fi
 
 1. **Broken automatic WebRTC→direct-channel fallback** ([demo#129](https://github.com/scimbe/CADS-webconference-demo/issues/129)) —
    on a UDP-blocked network, the fallback fires but hands off a stale signaling WebSocket; call is silently
-   abandoned ~2s later, ~14s of silence with no user feedback beforehand. Fix here: redesign the transport
-   handoff as an explicit state machine (see `rust-core/` transport module, TODO) with a fresh signaling
-   connection on fallback and visible UI feedback from t=0, not just after the automatic path fails.
+   abandoned ~2s later, ~14s of silence with no user feedback beforehand. Fixed (logic layer): `rust-core/src/transport_fallback.rs`
+   is a tested, pure state machine (`TransportFallbackController`) — every `FallingBackToDirectChannel` transition
+   carries `needs_fresh_signaling: true` (the actual bug was reusing a stale socket), and status updates are
+   forced well before the reference bug's ~14s silence window. 6 tests, all passing. Still needed: wiring this
+   controller to real Android WebRTC `PeerConnection.Observer` callbacks and a real timer (currently driven by
+   a caller-supplied `elapsed_ms`, by design, for testability) — the decision logic is done, the platform glue isn't.
 2. **No TURN relay** (STUN only) — needs a real TURN server + credential provisioning. `rust-core/src/ice.rs`
    provides the (tested) configuration surface — `build_ice_server_list()` takes real TURN URLs/credentials
    once provisioned and falls back to STUN-only otherwise. This crate has no more TURN infrastructure than the
