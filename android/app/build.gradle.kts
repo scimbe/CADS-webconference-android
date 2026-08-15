@@ -34,10 +34,10 @@ dependencies {
     implementation("androidx.core:core-ktx:1.13.1")
     implementation("androidx.appcompat:appcompat:1.7.0")
     implementation("androidx.security:security-crypto:1.1.0-alpha06") // EncryptedSharedPreferences, gap 3
-    implementation("org.webrtc:google-webrtc:1.0.32006")
-    // Wired in rust-core/build.gradle.kts (cargo-ndk + UniFFI Kotlin bindgen) -- NOT
-    // VERIFIED, no Gradle/Android toolchain available to actually build this. See that
-    // file's own doc comment and README.md's "Not yet done".
+    // Real build error, live-caught: org.webrtc:google-webrtc was only ever distributed via
+    // JCenter, shut down years ago -- unresolvable from Google's/Maven Central's real repos.
+    // com.infobip:google-webrtc is the actively maintained Maven Central replacement.
+    implementation("com.infobip:google-webrtc:1.0.45036")
     implementation(project(":rust-core"))
 
     // Instrumented tests (KeyStoreIdentityTest) -- EncryptedSharedPreferences/Keystore need
