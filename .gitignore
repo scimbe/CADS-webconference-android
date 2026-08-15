@@ -1,0 +1,14 @@
+# Rust
+/rust-core/target/
+Cargo.lock
+
+# Android / Gradle
+/android/.gradle/
+/android/build/
+/android/app/build/
+/android/local.properties
+*.iml
+.idea/
+
+# OS
+.DS_Store
