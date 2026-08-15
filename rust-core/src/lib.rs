@@ -217,10 +217,40 @@ impl NoiseTransport {
     }
 }
 
+/// Sign a byte string (the edge's 32-byte single-use possession challenge, in practice --
+/// see [`build_channel_join_request`]'s doc for the full join sequence) with a holder's
+/// ed25519 private key. The signature is sent RAW on the wire (no framing) as the direct
+/// response to that challenge.
+#[uniffi::export]
+pub fn holder_sign(holder_private_hex: String, message: Vec<u8>) -> Result<Vec<u8>, CtAgentError> {
+    use ed25519_dalek::Signer;
+    let sk = ed25519_dalek::SigningKey::from_bytes(&hex32(&holder_private_hex)?);
+    Ok(sk.sign(&message).to_bytes().to_vec())
+}
+
+/// Build the exact bytes a channel member sends to join a channel-to-channel session,
+/// from a pre-minted, hex-encoded `SignedChannelGrant` (this client cannot mint its own
+/// grant -- that needs the channel operator's private key -- a backend hands each peer
+/// its own grant hex out of band) and the endpoint this member advertises.
+///
+/// Full join sequence over the WebSocket, mirroring `channel_broker::read_channel_join_on_stream`:
+/// 1. send `frame_message(build_channel_join_request(grant, endpoint))` as one message
+/// 2. read the next 32 bytes -- `b"NO"` (2 bytes) means refused, otherwise it's a 32-byte
+///    single-use possession challenge
+/// 3. send `holder_sign(holder_private_hex, challenge)` (64 raw bytes, no framing) next
+/// 4. from here the socket is a raw relay splice until a partner also joins, then an
+///    `"OK <peer...>\n"` ack arrives on both sides and the Noise handshake begins
+#[uniffi::export]
+pub fn build_channel_join_request(grant_hex: String, endpoint: String) -> Result<Vec<u8>, CtAgentError> {
+    let grant_bytes = from_hex(&grant_hex)?;
+    let grant = ct_common::channel::SignedChannelGrant::decode(&grant_bytes)
+        .map_err(|e| CtAgentError::Generic(e.to_string()))?;
+    let req = ct_common::channel::ChannelJoinRequest { grant, endpoint };
+    Ok(req.encode())
+}
+
 // TODO, next iteration -- ported the same way as the above (read the real upstream
 // source first, then port), not yet done:
-// - holder_sign(holder_private_hex, message) -> Vec<u8>
-// - build_channel_join_request(grant_hex, endpoint) -> Vec<u8>
 // - encode_signal_offer/answer/ice_candidate/bye + decode_signal_message
 //   (the WebRTC signaling wire format -- needed for the channel-to-channel feature)
 // - ICE/TURN config (gap 2, ARCHITECTURE.md) -- not part of ct-agent-wasm's surface at
@@ -241,6 +271,38 @@ mod tests {
         let noise = generate_noise_identity();
         assert_eq!(from_hex(&noise.public_hex).unwrap().len(), 32);
         assert_eq!(from_hex(&noise.private_hex).unwrap().len(), 32);
+    }
+
+    /// Real signature verification, not just "it returns 64 bytes" -- proves holder_sign
+    /// produces a valid ed25519 signature over the exact challenge bytes, verifiable with
+    /// the holder's own public key (the edge does exactly this check on join).
+    #[test]
+    fn holder_sign_produces_a_verifiable_ed25519_signature() {
+        use ed25519_dalek::{Verifier, VerifyingKey, Signature};
+
+        let holder = generate_holder_identity();
+        let challenge = b"32-byte-ish possession challenge".to_vec();
+
+        let sig_bytes = holder_sign(holder.private_hex.clone(), challenge.clone()).unwrap();
+        assert_eq!(sig_bytes.len(), 64, "ed25519 signatures are always 64 bytes");
+
+        let vk = VerifyingKey::from_bytes(&hex32(&holder.public_hex).unwrap()).unwrap();
+        let sig = Signature::from_slice(&sig_bytes).unwrap();
+        vk.verify(&challenge, &sig).expect("signature must verify against the holder's own public key");
+
+        // A signature over different bytes with the same key must NOT verify -- sanity
+        // check that this isn't a no-op / always-true check.
+        assert!(vk.verify(b"different message", &sig).is_err());
+    }
+
+    #[test]
+    fn build_channel_join_request_rejects_garbage_grant_hex_instead_of_panicking() {
+        // No way to mint a real SignedChannelGrant here (that needs the channel
+        // operator's private key, held server-side, not part of this crate) -- so this
+        // test only proves malformed input is a clean Err, not a panic, which matters
+        // since this is the first thing called on a hostile/garbled join sequence.
+        let result = build_channel_join_request("not-valid-hex!!".to_string(), "relay-only".to_string());
+        assert!(result.is_err());
     }
 
     #[test]
