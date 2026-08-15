@@ -41,11 +41,7 @@ RUN mkdir -p "$ANDROID_SDK_ROOT/cmdline-tools" \
     && mv "$ANDROID_SDK_ROOT/cmdline-tools/cmdline-tools" "$ANDROID_SDK_ROOT/cmdline-tools/latest" \
     && rm /tmp/cmdline-tools.zip \
     && yes | sdkmanager --licenses > /dev/null \
-    && sdkmanager "platform-tools" "platforms;android-34" "build-tools;34.0.0"
-# NDK deliberately NOT installed here yet (large download, bounded-time build) -- means
-# `gradle tasks`/sync in this image gets exactly as far as rust-android-gradle's own NDK
-# presence check and stops there (verified: "NDK is not installed", not a plugin/config
-# error). Real end-to-end verification (an actual `:rust-core:assembleDebug`) needs
-# `sdkmanager "ndk;<version>"` added here first.
+    && sdkmanager "platform-tools" "platforms;android-34" "build-tools;34.0.0" "ndk;26.3.11579264"
+ENV ANDROID_NDK_HOME=/opt/android-sdk/ndk/26.3.11579264
 
 WORKDIR /workspace
