@@ -16,8 +16,14 @@
 # copied .so libs, Kotlin incremental-compile caches) because only android/build/ was
 # listed, not rust-core/build/ (a sibling Gradle module outside android/).
 /rust-core/build/
+# cargoNdkBuild writes here directly (real .so binaries, regenerated every build).
+/rust-core/src/main/jniLibs/
 *.iml
 .idea/
+# JVM heap dump, auto-written on the OutOfMemoryError hit before org.gradle.jvmargs was
+# tuned -- root-owned inside the container, left in place (not mine to delete), just
+# excluded from git.
+*.hprof
 
 # OS
 .DS_Store
