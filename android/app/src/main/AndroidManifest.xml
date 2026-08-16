@@ -5,6 +5,14 @@
     <uses-permission android:name="android.permission.CAMERA" />
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <!-- Real, minimum permission set for incoming-call push notifications (the user's own
+         ask): POST_NOTIFICATIONS is required at runtime on API 33+ (requested in
+         MainActivity), the two FOREGROUND_SERVICE permissions are required to declare
+         IncomingCallService's phoneCall type below (API 34+ needs both, not just one). -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_PHONE_CALL" />
+    <uses-permission android:name="android.permission.USE_FULL_SCREEN_INTENT" />
 
     <application
         android:allowBackup="false"
@@ -19,5 +27,17 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <activity
+            android:name=".call.IncomingCallActivity"
+            android:exported="false"
+            android:showOnLockScreen="true"
+            android:excludeFromRecents="true"
+            android:launchMode="singleTask" />
+
+        <service
+            android:name=".call.IncomingCallService"
+            android:exported="false"
+            android:foregroundServiceType="phoneCall" />
     </application>
 </manifest>
