@@ -37,35 +37,28 @@ missing `android/gradle.properties` (`android.useAndroidX=true` was never set), 
 `org.webrtc:google-webrtc:1.0.32006` not existing on any real repo (only ever distributed via
 the long-shut-down JCenter) — replaced with `com.infobip:google-webrtc:1.0.45036`.
 
-**One known, precisely-diagnosed gap remains**: `rust-core-debug.aar` packages `classes.jar`
-correctly but not the native `.so` libraries under `jni/<abi>/` — confirmed via `unzip -l` across
-three separate build attempts, including a clean rebuild. Root-caused via
-[mozilla/rust-android-gradle#85](https://github.com/mozilla/rust-android-gradle/issues/85):
-`mergeDebugJniLibFolders` wasn't depending on `cargoBuild`, so it could snapshot an empty jniLibs
-source before the `.so` files existed. Added the documented fix (`mergeDebugJniLibFolders
-dependsOn cargoBuild`) — this corrected the task ordering, but a clean rebuild with the fix in
-place still hits a *separate* issue: a genuine duplicate registration of the same jniLibs source
-directory (`Resource and asset merger: Duplicate resources` on every ABI, reproduced consistently
-on multiple clean builds, not a stale-cache artifact). Tried a second, community-confirmed fix
-from the same upstream thread (`preDebugBuild`/`preReleaseBuild dependsOn cargoBuild` instead of
-the merge task directly) — same result. Checked the plugin's actual source
-(`RustAndroidPlugin.kt` v0.9.6): it registers `sourceSets.getByName("main").jniLibs.srcDir(...)`
-exactly **once** — so the duplicate isn't a double-registration in the plugin itself, and the
-real cause is still unidentified (likely an AGP-version/plugin-version interaction rather than
-anything this project's config controls). Matches
-[mozilla/rust-android-gradle#43](https://github.com/mozilla/rust-android-gradle/issues/43). Spent
-three focused rounds on this; stopping here rather than continuing to chase it — an app depending
-on this `.aar` as-is would compile against the Kotlin API but crash with `UnsatisfiedLinkError` at
-runtime. Real next steps, not yet tried: pin an older/newer `rust-android-gradle` version, switch
-to the actively-maintained `willir/cargo-ndk-android-gradle` fork (mentioned favorably in the same
-upstream thread), or hand-roll `.aar` assembly without this plugin's jniLibs wiring at all.
+**RESOLVED — this repo now builds a real, complete, installable APK.** The native-lib-packaging
+gap (`rust-core-debug.aar` missing `.so` files) was chased through `mozilla/rust-android-gradle`
+across three rounds (task-dependency fixes, source-code inspection) without success — instead of
+continuing to fight that plugin's unresolved bug
+([mozilla/rust-android-gradle#43](https://github.com/mozilla/rust-android-gradle/issues/43)), it
+was removed entirely. `rust-core/build.gradle.kts` now cross-compiles directly via
+`cargo ndk -o src/main/jniLibs build` (no plugin needed — that's cargo-ndk's own `-o` flag writing
+straight into the directory layout AGP's `com.android.library` plugin already understands
+natively). Verified end-to-end: `gradle :rust-core:assembleDebug` produces an `.aar` with real
+`jni/<abi>/libct_agent_android.so` for all 4 ABIs (confirmed via `unzip -l`), and
+`gradle :app:assembleDebug` produces a real 286MB `app-debug.apk` containing all dex classes, our
+native lib, `google-webrtc`'s native lib, and JNA's — also confirmed via `unzip -l` on the actual
+APK, not assumed from a successful exit code.
 
 Not yet done:
-- The native-library-packaging gap above.
-- `KeyStoreIdentity.kt` (Android Keystore-backed key storage, gap 3) compiles but has no
-  instrumented-test run yet (needs a connected device/emulator, not attempted).
+- `KeyStoreIdentity.kt` (Android Keystore-backed key storage, gap 3) compiles and is packaged but
+  has no instrumented-test run yet (needs a connected device/emulator, not attempted).
 - No real call UI beyond the identity-generation status screen.
 - TURN (gap 2) has a tested config surface but no real TURN server/credentials behind it.
 - Gap 4 (narrow bridge trust model) is server-side, out of this repo's scope.
+- The `.so` libraries are currently unstripped debug builds (~55-61MB each) — `strip` wasn't
+  available in the NDK toolchain path used, so release builds would need that fixed for a
+  reasonably-sized production APK.
 
 See [ARCHITECTURE.md](./ARCHITECTURE.md) for the full per-gap detail.
