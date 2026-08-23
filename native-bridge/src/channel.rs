@@ -55,6 +55,7 @@
 
 use std::net::SocketAddr;
 use std::sync::Arc;
+use std::time::Duration;
 
 use ct_common::a2a::{a2a_initiate, a2a_respond, a2a_send};
 use ct_common::noise::{generate_static_keypair, read_frame, StaticKeypair};
@@ -64,6 +65,22 @@ use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::Mutex;
 
 use crate::message::{decode_text_message, encode_text_message, MessageDecodeError, TextMessage};
+
+/// Bound on the TCP connect and the Noise_IK handshake round-trip, on both the dial
+/// (`dial_channel_direct`) and accept (`ChannelListener::accept`, after a connection is already
+/// accepted) sides. Neither `TcpStream::connect` nor `a2a_initiate`/`a2a_respond` has any
+/// built-in timeout -- this is a generic transport-agnostic primitive, and applying a bound is
+/// the caller's job. Without one: a `dial_channel_direct` call against an unreachable/
+/// blackholed address (this increment's own doc comment describes the address as
+/// "manually-entered" -- exactly the kind of input a user can simply mistype) hangs the calling
+/// Kotlin coroutine forever with no way to give up short of killing the app; worse, on the
+/// accept side, `ChannelListener` is documented as single-shot ("waiting to accept exactly one
+/// direct channel session") -- a peer that completes the TCP connect but then never sends its
+/// handshake message (a stray port scanner, a stalled network path) leaves `accept()` blocked
+/// forever on that one straggler, and the real intended peer can never be served at all. 20s
+/// matches the dial-timeout convention already used elsewhere in this session's sibling repos
+/// (e.g. CADS-p2p-vault's `--dial-timeout-secs` default).
+const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(20);
 
 /// Errors from the direct peer-to-peer channel path. A real, typed error crossing the UniFFI
 /// boundary -- same discipline as [`crate::message::MessageDecodeError`]: no panics across the
@@ -313,25 +330,49 @@ impl ChannelSession {
 /// `peer_public_key_hex`: `ct_common::a2a::a2a_initiate` encrypts its second handshake message
 /// to that pinned key, so a wrong key fails the responder's read, which surfaces here as
 /// `ChannelError::Handshake`/`Io` (the TCP connection drops when the responder's read errors).
+/// The real body, parameterized over the timeout so tests can prove the timeout actually fires
+/// without waiting the real [`HANDSHAKE_TIMEOUT`] -- `dial_channel_direct` below is a thin
+/// wrapper that always passes the real constant.
+async fn dial_channel_direct_with_timeout(
+    identity: Arc<ChannelIdentity>,
+    peer_public_key_hex: String,
+    peer_addr: String,
+    timeout: Duration,
+) -> Result<Arc<ChannelSession>, ChannelError> {
+    let peer_public_key = hex_decode_32(&peer_public_key_hex)?;
+    let addr = parse_socket_addr(&peer_addr)?;
+    let stream = tokio::time::timeout(timeout, TcpStream::connect(addr))
+        .await
+        .map_err(|_| ChannelError::Io { reason: format!("connect timed out after {timeout:?}") })??;
+    let _ = stream.set_nodelay(true); // best-effort: lower handshake/message latency, not correctness-critical
+    let (mut read, mut write) = stream.into_split();
+    let transport = tokio::time::timeout(
+        timeout,
+        a2a_initiate(&mut write, &mut read, &identity.keypair.private, &peer_public_key),
+    )
+    .await
+    .map_err(|_| ChannelError::Handshake { reason: format!("handshake timed out after {timeout:?}") })?
+    .map_err(|e| ChannelError::Handshake { reason: e.to_string() })?;
+    // Canonical lowercase-hex re-encoding of the real, decoded, handshake-pinned key -- not
+    // the raw caller-supplied string verbatim, so a caller passing mixed-case hex (still valid
+    // input to hex_decode_32) can never produce a sender_pubkey that fails a later byte-exact
+    // comparison against generate_noise_public_key_hex()'s own always-lowercase output.
+    Ok(ChannelSession::new(read, write, transport, Some(hex_encode_32(&peer_public_key))))
+}
+
+/// Dials `peer_addr` (a `host:port` TCP address) and runs the **initiator** half of a direct
+/// Noise_IK handshake pinned to `peer_public_key_hex`. Fails -- does not silently
+/// "succeed" against the wrong peer -- if the remote's actual Noise static key does not match
+/// `peer_public_key_hex`: `ct_common::a2a::a2a_initiate` encrypts its second handshake message
+/// to that pinned key, so a wrong key fails the responder's read, which surfaces here as
+/// `ChannelError::Handshake`/`Io` (the TCP connection drops when the responder's read errors).
 #[uniffi::export(async_runtime = "tokio")]
 pub async fn dial_channel_direct(
     identity: Arc<ChannelIdentity>,
     peer_public_key_hex: String,
     peer_addr: String,
 ) -> Result<Arc<ChannelSession>, ChannelError> {
-    let peer_public_key = hex_decode_32(&peer_public_key_hex)?;
-    let addr = parse_socket_addr(&peer_addr)?;
-    let stream = TcpStream::connect(addr).await?;
-    let _ = stream.set_nodelay(true); // best-effort: lower handshake/message latency, not correctness-critical
-    let (mut read, mut write) = stream.into_split();
-    let transport = a2a_initiate(&mut write, &mut read, &identity.keypair.private, &peer_public_key)
-        .await
-        .map_err(|e| ChannelError::Handshake { reason: e.to_string() })?;
-    // Canonical lowercase-hex re-encoding of the real, decoded, handshake-pinned key -- not
-    // the raw caller-supplied string verbatim, so a caller passing mixed-case hex (still valid
-    // input to hex_decode_32) can never produce a sender_pubkey that fails a later byte-exact
-    // comparison against generate_noise_public_key_hex()'s own always-lowercase output.
-    Ok(ChannelSession::new(read, write, transport, Some(hex_encode_32(&peer_public_key))))
+    dial_channel_direct_with_timeout(identity, peer_public_key_hex, peer_addr, HANDSHAKE_TIMEOUT).await
 }
 
 /// A bound TCP listener waiting to accept exactly one direct channel session. Split from
@@ -357,6 +398,38 @@ impl ChannelListener {
     }
 }
 
+impl ChannelListener {
+    /// The real body, parameterized over the timeout so tests can prove the timeout actually
+    /// fires without waiting the real [`HANDSHAKE_TIMEOUT`] -- `accept` below is a thin wrapper
+    /// that always passes the real constant.
+    async fn accept_with_timeout(
+        &self,
+        identity: Arc<ChannelIdentity>,
+        handshake_timeout: Duration,
+    ) -> Result<Arc<ChannelSession>, ChannelError> {
+        let (stream, _peer_addr) = self.listener.accept().await?;
+        let _ = stream.set_nodelay(true);
+        let (mut read, mut write) = stream.into_split();
+        // The `accept()` wait above stays unbounded (that's a listening socket doing its job --
+        // it should wait as long as the caller wants it to). The handshake AFTER a connection is
+        // already accepted is different: `ChannelListener` is single-shot, so a peer that
+        // connects and then never sends its handshake message (a stray scanner, a stalled
+        // network path) would otherwise leave this call -- and the real intended peer -- stuck
+        // forever. See `HANDSHAKE_TIMEOUT`'s own doc comment.
+        let transport = tokio::time::timeout(
+            handshake_timeout,
+            a2a_respond(&mut write, &mut read, &identity.keypair.private),
+        )
+        .await
+        .map_err(|_| ChannelError::Handshake { reason: format!("handshake timed out after {handshake_timeout:?}") })?
+        .map_err(|e| ChannelError::Handshake { reason: e.to_string() })?;
+        // `None`: see `known_peer_public_key_hex`'s own doc comment -- a2a_respond doesn't
+        // hand back the initiator's key it authenticated internally, so there is nothing real
+        // to pin here yet. recv_text falls back to the wire's own (unverified) value.
+        Ok(ChannelSession::new(read, write, transport, None))
+    }
+}
+
 #[uniffi::export(async_runtime = "tokio")]
 impl ChannelListener {
     /// Accepts exactly one incoming TCP connection and runs the **responder** half of the
@@ -364,16 +437,7 @@ impl ChannelListener {
     /// handshake itself (the responder does not need to know the initiator's key in advance --
     /// only the initiator pins the responder's).
     async fn accept(&self, identity: Arc<ChannelIdentity>) -> Result<Arc<ChannelSession>, ChannelError> {
-        let (stream, _peer_addr) = self.listener.accept().await?;
-        let _ = stream.set_nodelay(true);
-        let (mut read, mut write) = stream.into_split();
-        let transport = a2a_respond(&mut write, &mut read, &identity.keypair.private)
-            .await
-            .map_err(|e| ChannelError::Handshake { reason: e.to_string() })?;
-        // `None`: see `known_peer_public_key_hex`'s own doc comment -- a2a_respond doesn't
-        // hand back the initiator's key it authenticated internally, so there is nothing real
-        // to pin here yet. recv_text falls back to the wire's own (unverified) value.
-        Ok(ChannelSession::new(read, write, transport, None))
+        self.accept_with_timeout(identity, HANDSHAKE_TIMEOUT).await
     }
 }
 
@@ -620,6 +684,83 @@ mod tests {
             .expect("recv task")
             .expect("recv_text must succeed");
         assert_eq!(received, outbound, "the responder must decrypt exactly what was sent while it was waiting");
+    }
+
+    /// Real gap, found while auditing this module fresh (no prior review had covered it): the
+    /// TCP connect and Noise_IK handshake had no timeout at all on either side. This proves the
+    /// dial side: a real listener accepts the TCP connection but is deliberately never told to
+    /// run its own handshake, so nothing ever answers -- exactly the "connected but silent" peer
+    /// the timeout exists for. Uses `dial_channel_direct_with_timeout` directly with a short
+    /// duration so the test doesn't have to wait the real `HANDSHAKE_TIMEOUT` (20s); the outer
+    /// `tokio::time::timeout` is a guard so a regression (the fix reverted) fails this test
+    /// quickly instead of hanging the whole suite.
+    #[tokio::test]
+    async fn dial_channel_direct_times_out_if_the_peer_accepts_but_never_completes_the_handshake() {
+        let raw_listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
+        let bound_addr = raw_listener.local_addr().expect("local_addr").to_string();
+        let accept_task = tokio::spawn(async move {
+            let (stream, _) = raw_listener.accept().await.expect("accept");
+            tokio::time::sleep(Duration::from_secs(10)).await; // hold the connection open, silent
+            drop(stream);
+        });
+
+        let identity = generate_channel_identity();
+        let peer = generate_channel_identity();
+        let start = std::time::Instant::now();
+        let result = tokio::time::timeout(
+            Duration::from_secs(3), // must never actually fire against the fix
+            dial_channel_direct_with_timeout(identity, peer.public_key_hex(), bound_addr, Duration::from_millis(200)),
+        )
+        .await
+        .expect("dial_channel_direct_with_timeout must return well within the outer guard, not hang");
+        let elapsed = start.elapsed();
+
+        match result {
+            Err(ChannelError::Handshake { reason }) => assert!(reason.contains("timed out"), "reason: {reason}"),
+            Err(other) => panic!("expected a Handshake timeout error, got a different ChannelError: {other}"),
+            // `ChannelSession` has no `Debug` impl (see `dial_rejects_a_malformed_peer_key_without_panicking`'s own comment).
+            Ok(_) => panic!("expected a Handshake timeout error, got a live session instead"),
+        }
+        assert!(elapsed < Duration::from_secs(2), "must fail quickly, not hang -- took {elapsed:?}");
+
+        accept_task.abort();
+    }
+
+    /// The accept-side half of the same gap, and the more serious one: `ChannelListener` is
+    /// single-shot, so without a timeout a peer that connects and then never sends its handshake
+    /// message would leave `accept()` -- and the real intended peer -- stuck forever. Uses
+    /// `accept_with_timeout` directly with a short duration for the same reason as the dial-side
+    /// test above.
+    #[tokio::test]
+    async fn accept_times_out_if_a_peer_connects_but_never_sends_a_handshake_message() {
+        let listener = bind_channel_listener("127.0.0.1:0".to_string()).await.expect("bind");
+        let bound_addr = listener.local_addr().expect("local_addr");
+
+        let silent_peer = tokio::spawn(async move {
+            let stream = TcpStream::connect(bound_addr).await.expect("connect");
+            tokio::time::sleep(Duration::from_secs(10)).await; // connect, then say nothing
+            drop(stream);
+        });
+
+        let identity = generate_channel_identity();
+        let start = std::time::Instant::now();
+        let result = tokio::time::timeout(
+            Duration::from_secs(3), // must never actually fire against the fix
+            listener.accept_with_timeout(identity, Duration::from_millis(200)),
+        )
+        .await
+        .expect("accept_with_timeout must return well within the outer guard, not hang");
+        let elapsed = start.elapsed();
+
+        match result {
+            Err(ChannelError::Handshake { reason }) => assert!(reason.contains("timed out"), "reason: {reason}"),
+            Err(other) => panic!("expected a Handshake timeout error, got a different ChannelError: {other}"),
+            // `ChannelSession` has no `Debug` impl (see `dial_rejects_a_malformed_peer_key_without_panicking`'s own comment).
+            Ok(_) => panic!("expected a Handshake timeout error, got a live session instead"),
+        }
+        assert!(elapsed < Duration::from_secs(2), "must fail quickly, not hang -- took {elapsed:?}");
+
+        silent_peer.abort();
     }
 
     /// Authentication property, not an edge case: dialing with a WRONG `peer_public_key_hex`
